@@ -35,6 +35,11 @@ add_executable(roquest
     ${PROJECT_SOURCES}
 )
 
+add_custom_target(copy_assets
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_LIST_DIR}/res ${EXECUTABLE_OUTPUT_PATH}/res
+)
+add_dependencies(roquest copy_assets)
+
 target_link_libraries (roquest 
     ${SDL2_LIBRARIES}
 )
