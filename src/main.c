@@ -11,6 +11,9 @@ const int TILE_HEIGHT = 16;
 const int WINDOW_WIDTH = TILE_WIDTH * 100;
 const int WINDOW_HEIGHT = TILE_HEIGHT * 50;
 
+const int ZOOMX = 2;
+const int ZOOMY = 2;
+
 struct global {
     SDL_Window* window;
     SDL_Renderer* renderer;
@@ -87,17 +90,17 @@ SDL_Texture* load_image(const char* file, int* w, int* h)
 void render_tile(int x, int y, char ch, uint8_t red, uint8_t blue, uint8_t green) {
     int srcx = (ch % 16) * TILE_WIDTH;
     int srcy = (ch / 16) * TILE_HEIGHT;
-    int dstx = x * TILE_WIDTH;
-    int dsty = y * TILE_HEIGHT;
+    int dstx = x * TILE_WIDTH * ZOOMX;
+    int dsty = y * TILE_HEIGHT * ZOOMY;
 
     SDL_SetTextureColorMod(g.font, red, green, blue);
-    SDL_RenderCopy(g.renderer, g.font, &(SDL_Rect) { srcx, srcy, TILE_WIDTH, TILE_HEIGHT}, & (SDL_Rect) { dstx, dsty, TILE_WIDTH, TILE_HEIGHT });
+    SDL_RenderCopy(g.renderer, g.font, &(SDL_Rect) { srcx, srcy, TILE_WIDTH, TILE_HEIGHT}, & (SDL_Rect) { dstx, dsty, TILE_WIDTH * ZOOMX, TILE_HEIGHT * ZOOMY });
 }
 
 void render() {
 
-    int sx = (WINDOW_WIDTH / TILE_WIDTH - g.map_width) / 2;
-    int sy = (WINDOW_HEIGHT / TILE_HEIGHT - g.map_height) / 2;
+    int sx = (WINDOW_WIDTH / (TILE_WIDTH * ZOOMX) - g.map_width) / 2;
+    int sy = (WINDOW_HEIGHT / (TILE_HEIGHT * ZOOMY) - g.map_height) / 2;
 
     // simple blocked map
     for (int y = 0; y < g.map_width; y++) {
@@ -130,7 +133,7 @@ int main(int argc, char* argv[])
     g.font = load_image("default-font.png", &fw, &fh);
     SDL_assert(fw == TILE_WIDTH * 16 && fh == TILE_HEIGHT * 16);
 
-    g.map_width = g.map_height = 30;
+    g.map_width = g.map_height = 12;
     g.player_x = g.map_width / 2;
     g.player_y = g.map_height / 2;
 
