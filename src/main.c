@@ -9,12 +9,12 @@ const int TILE_WIDTH = 8;
 const int TILE_HEIGHT = 16;
 
 const int WINDOW_WIDTH = TILE_WIDTH * 100;
-const int WINDOW_HEIGHT = TILE_HEIGHT * 50;
+const int WINDOW_HEIGHT = TILE_HEIGHT * 34;
 
 const int ZOOMX = 1;
 const int ZOOMY = 1;
 
-#define COLS  32
+#define COLS  64
 #define ROWS  32
 
 struct global {
@@ -179,6 +179,101 @@ void render()
     render_tile(sx + g.player_x, sy + g.player_y, '@', (struct color) { 255, 255, 255 });
 }
 
+static uint32_t random_seed = 0x17041971;
+
+static uint32_t next_rand()
+{
+    return random_seed = random_seed * 134775813 + 1;
+}
+
+uint32_t random(uint32_t not_included_max)
+{
+    uint64_t result = (uint64_t)not_included_max * (uint64_t)next_rand();
+    return result >> 32;
+}
+
+int random_range(int included_min, int included_max)
+{
+    SDL_assert(included_min <= included_max);
+    return included_min + random(included_max - included_min + 1);
+}
+
+struct room {
+    int x, y, w, h;
+};
+
+void split_room(const struct room* room, bool hor)
+{
+    if (room->w < 7 && room->h < 7)
+        return;
+
+    if (room->w < 15 && room->h < 15 && random(100) < 50)
+        return;
+
+    hor = room->w < 7 ? true : (room->h < 7 ? false : hor);
+
+    int x, y, w, h;
+    if (hor) {
+        y = room->y + 3 + random(room->h - 6);
+        split_room(&(struct room) { room->x, room->y, room->w, y - room->y }, false);
+        split_room(&(struct room) { room->x, y + 1, room->w, room->y + room->h - y - 1 }, false);
+        for (int n = 0; n < room->w; n++) {
+            map[y][room->x + n].type = TILE_TYPE_WALL;
+        }
+    } else {
+        x = room->x + 3 + random(room->w - 6);
+        split_room(&(struct room) { room->x, room->y, x - room->x, room->h }, true);
+        split_room(&(struct room) { x + 1, room->y, room->x + room->w - x - 1, room->h }, true);
+        for (int n = 0; n < room->h; n++)
+            map[room->y + n][x].type = TILE_TYPE_WALL;
+    }
+}
+
+void split_room2(const struct room* room)
+{
+    if (room->w < 11 && room->h < 5)
+        return;
+
+    int area = room->w * room->h;
+
+    if (area < 50)
+        return;
+
+    if (area < 225 && random(100) < 50)
+        return;
+
+    bool hor;
+    if (room->w < 11)
+        hor = true;
+    else if (room->h < 5) {
+        hor = false;
+    } else {
+        if (room->w >= room->h * 3)
+            hor = false;
+        else if (room->h * 4 >= room->w * 3)
+            hor = true;
+        else {
+            int r = random(room->w + room->h * 2);
+            hor = r >= room->w;
+        }
+    }
+
+    if (hor) {
+        int y = room->y + room->h / 4 + random(room->h / 2);
+        split_room2(&(struct room) { room->x, room->y, room->w, y - room->y });
+        split_room2(&(struct room) { room->x, y + 1, room->w, room->y + room->h - y - 1 });
+        for (int n = 0; n < room->w; n++) {
+            map[y][room->x + n].type = TILE_TYPE_WALL;
+        }
+    } else {
+        int x = room->x + room->w / 4 + random(room->w / 2);
+        split_room2(&(struct room) { room->x, room->y, x - room->x, room->h });
+        split_room2(&(struct room) { x + 1, room->y, room->x + room->w - x - 1, room->h });
+        for (int n = 0; n < room->h; n++)
+            map[room->y + n][x].type = TILE_TYPE_WALL;
+    }
+}
+
 void create_map()
 {
     for (int y = 0; y < ROWS; y++) {
@@ -196,6 +291,16 @@ void create_map()
             }
         }
     }
+
+    // for (int n = 0; n < 1; n++) {
+
+    //     int w = random_range(7, 13);
+    //     int h = random_range(4, 7);
+
+    // }
+
+    split_room2(&(struct room) { 1, 1, COLS - 2, ROWS - 2 });
+
 }
 
 int main(int argc, char* argv[])
@@ -218,6 +323,7 @@ int main(int argc, char* argv[])
     g.font = load_image("default-font.png", &fw, &fh);
     SDL_assert(fw == TILE_WIDTH * 16 && fh == TILE_HEIGHT * 16);
 
+    random_seed = 1;
     create_map();
     g.player_x = COLS / 2;
     g.player_y = ROWS / 2;
@@ -233,20 +339,26 @@ int main(int argc, char* argv[])
                     quit_requested = true;
                     break;
                 case SDL_KEYDOWN:
-                    switch (event.key.keysym.scancode) {
-                        case SDL_SCANCODE_UP:
-                            if (g.player_y > 0) g.player_y--;
+                    switch (event.key.keysym.sym) {
+                        case 'c':
+                            create_map();
                             break;
-                        case SDL_SCANCODE_DOWN:
-                            if (g.player_y < ROWS - 1) g.player_y++;
-                            break;
-                        case SDL_SCANCODE_LEFT:
-                            if (g.player_x > 0) g.player_x--;
-                            break;
-                        case SDL_SCANCODE_RIGHT:
-                            if (g.player_x < COLS - 1) g.player_x++;
                         default:
-                            break;
+                            switch (event.key.keysym.scancode) {
+                                case SDL_SCANCODE_UP:
+                                    if (g.player_y > 0) g.player_y--;
+                                    break;
+                                case SDL_SCANCODE_DOWN:
+                                    if (g.player_y < ROWS - 1) g.player_y++;
+                                    break;
+                                case SDL_SCANCODE_LEFT:
+                                    if (g.player_x > 0) g.player_x--;
+                                    break;
+                                case SDL_SCANCODE_RIGHT:
+                                    if (g.player_x < COLS - 1) g.player_x++;
+                                default:
+                                    break;
+                            }
                     }
             }
         }
