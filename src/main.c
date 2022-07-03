@@ -4,34 +4,6 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
-char* pattern[] = {
-
-    "xxxxxxx",
-    "x      ",
-    "x      ",
-    "x      ",
-    "x      ",
-    "x      ",
-    "x      ",
-
-    "xxxxxxx",
-    "       ",
-    "       ",
-    "       ",
-    "       ",
-    "       ",
-    "       ",
-
-    "       ",
-    "       ",
-    "       ",
-    "       ",
-    "       ",
-    "       ",
-    "       ",
-
-};
-
 // TODO tile-size should be variable
 const int TILE_WIDTH = 8;
 const int TILE_HEIGHT = 16;
@@ -42,8 +14,11 @@ const int WINDOW_HEIGHT = TILE_HEIGHT * 34;
 const int ZOOMX = 1;
 const int ZOOMY = 1;
 
-#define COLS  64
-#define ROWS  32
+#define NUM_COL_PATTERN 10
+#define NUM_ROW_PATTERN 5
+
+#define COLS  (7 + (NUM_COL_PATTERN-1) * 6)
+#define ROWS  (7 + (NUM_ROW_PATTERN-1) * 6)
 
 struct global {
     SDL_Window* window;
@@ -70,6 +45,25 @@ struct map_tile {
 };
 
 static struct map_tile map[ROWS][COLS];
+
+void dump_map()
+{
+    char s[COLS + 1];
+    SDL_Log("");
+    for (int y = 0; y < ROWS; y++) {
+        for (int x = 0; x < COLS; x++) {
+            switch (map[y][x].type) {
+                case TILE_TYPE_WALL: s[x] = 'x'; break;
+                case TILE_TYPE_FLOOR: s[x] = '.'; break;
+                case TILE_TYPE_NOTHING: s[x] = '~'; break;
+                default: s[x] = '?'; break;
+
+            }
+        }
+        s[COLS] = '\0';
+        SDL_Log(s);
+    }
+}
 
 const struct color WALL_TOP_COLOR = { 192, 192, 168 };
 const struct color WALL_SIDE_COLOR = { 104, 104, 72 };
@@ -332,7 +326,7 @@ bool is_area_of_type(int x, int y, int w, int h, enum tile_type type)
 {
     for (int j = 0; j < h; j++) {
         for (int i = 0; i < w; i++) {
-            if (!is_tile_of_type(x+i, y+j, type))
+            if (!is_tile_of_type(x + i, y + j, type))
                 return false;
         }
     }
@@ -370,9 +364,9 @@ bool can_room_placed(const struct room* room)
         if (!is_area_of_type(x1 - 3, y1 + 1, 3, 3, TILE_TYPE_FLOOR))
             return false;
         if (y1 + 4 < y2 - 4)
-            
+
             if (!is_area_empty(x1 - 3, y2 - 4, 3, 4))
-            return false;
+                return false;
 
         //bot-left area
         if (y2 < ROWS) {
@@ -385,7 +379,7 @@ bool can_room_placed(const struct room* room)
         // top area
         if (!is_area_empty(x1, y1 - 3, 4, 3))
             return false;
-        if (!is_area_empty(x2 - 4, y1-3,  4, 3))
+        if (!is_area_empty(x2 - 4, y1 - 3, 4, 3))
             return false;
     }
 
@@ -419,62 +413,518 @@ bool can_room_placed(const struct room* room)
     return true;
 }
 
+struct pattern {
+    const char* t[7];
+    int rot;
+};
+
+struct pattern rot_patterns[] = {
+
+    {
+        {
+            "xxxxxxx",
+            "x      ",
+            "x      ",
+            "x      ",
+            "x      ",
+            "x      ",
+            "x      "
+        }, 4
+    },
+
+    {
+        {
+            "xxxxxxx",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "       "
+        }, 4
+    },
+
+    {
+        {
+            "xxxxxxx",
+            "x     x",
+            "x     x",
+            "x     x",
+            "x     x",
+            "x     x",
+            "x     x",
+        }, 4
+    },
+
+    {
+        {
+            "xxxxxxx",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "xxxxxxx"
+        }, 2
+    },
+
+    {
+        {
+            "xxxxxxx",
+            "x     x",
+            "x     x",
+            "x     x",
+            "x     x",
+            "x     x",
+            "xxxxxxx",
+        }, 1
+    },
+
+    {
+        {
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+        }, 1
+    },
+
+    {
+        {
+            "x      ",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+        }, 4
+    },
+
+    {
+        {
+            "x     x",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+        }, 4
+    },
+
+    {
+        {
+            "x      ",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "      x",
+        }, 2
+    },
+
+    {
+        {
+            "x     x",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "x      ",
+        }, 4
+    },
+
+    {
+        {
+            "x     x",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "x     x",
+        }, 1
+    },
+
+    {
+        {
+            "x      ",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "xxxxxxx",
+        }, 4
+    },
+
+    {
+        {
+            "x     x",
+            "      x",
+            "      x",
+            "      x",
+            "      x",
+            "      x",
+            "      x",
+        }, 4
+    },
+
+    {
+        {
+            "x     x",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "       ",
+            "xxxxxxx",
+        }, 4
+    },
+
+    {
+        {
+            "x     x",
+            "      x",
+            "      x",
+            "      x",
+            "      x",
+            "      x",
+            "xxxxxxx",
+        }, 4
+    }
+};
+
+char* patterns[] = {
+
+    "xxxxxxx",
+    "x      ",
+    "x      ",
+    "x      ",
+    "x      ",
+    "x      ",
+    "x      ",
+
+    "xxxxxxx",
+    "      x",
+    "      x",
+    "      x",
+    "      x",
+    "      x",
+    "      x",
+
+    "      x",
+    "      x",
+    "      x",
+    "      x",
+    "      x",
+    "      x",
+    "xxxxxxx",
+
+    "x      ",
+    "x      ",
+    "x      ",
+    "x      ",
+    "x      ",
+    "x      ",
+    "xxxxxxx",
+
+    "xxxxxxx",
+    "       ",
+    "       ",
+    "       ",
+    "       ",
+    "       ",
+    "       ",
+
+    "      x",
+    "      x",
+    "      x",
+    "      x",
+    "      x",
+    "      x",
+    "      x",
+
+    "       ",
+    "       ",
+    "       ",
+    "       ",
+    "       ",
+    "       ",
+    "xxxxxxx",
+
+    "x      ",
+    "x      ",
+    "x      ",
+    "x      ",
+    "x      ",
+    "x      ",
+    "x      ",
+
+    "xxxxxxx",
+    "x     x",
+    "x     x",
+    "x     x",
+    "x     x",
+    "x     x",
+    "x     x",
+
+    "xxxxxxx",
+    "      x",
+    "      x",
+    "      x",
+    "      x",
+    "      x",
+    "xxxxxxx",
+
+    "x     x",
+    "x     x",
+    "x     x",
+    "x     x",
+    "x     x",
+    "x     x",
+    "xxxxxxx",
+
+    "xxxxxxx",
+    "x      ",
+    "x      ",
+    "x      ",
+    "x      ",
+    "x      ",
+    "xxxxxxx",
+
+    "xxxxxxx",
+    "x     x",
+    "x     x",
+    "x     x",
+    "x     x",
+    "x     x",
+    "xxxxxxx",
+
+    "       ",
+    "       ",
+    "       ",
+    "       ",
+    "       ",
+    "       ",
+    "       ",
+
+    "x      ",
+    "       ",
+    "       ",
+    "       ",
+    "       ",
+    "       ",
+    "       ",
+
+};
+
+static char(*xpatterns)[7][7];
+static int num_xpat;
+
 void create_map()
 {
-    for (int y = 0; y < ROWS; y++) {
-        for (int x = 0; x < COLS; x++) {
-            map[y][x].type = TILE_TYPE_NOTHING;
+    if (!xpatterns) {
+
+        num_xpat = 0;
+        for (int j = 0; j < SDL_arraysize(rot_patterns); j++) {
+            num_xpat += rot_patterns[j].rot;
         }
+
+        xpatterns = malloc(7 * 7 * num_xpat);
+
+        char(*p)[7][7] = xpatterns;
+        for (int j = 0; j < SDL_arraysize(rot_patterns); j++) {
+
+            int rot = rot_patterns[j].rot;
+
+            if (rot == 1) {
+                for (int i = 0; i < 49; i++) {
+                    int x = i % 7;
+                    int y = i / 7;
+                    p[0][y][x] = rot_patterns[j].t[y][x];
+                }
+                p++;
+            } else if (rot == 2) {
+                for (int i = 0; i < 49; i++) {
+                    int x = i % 7;
+                    int y = i / 7;
+                    p[0][y][x] = rot_patterns[j].t[y][x];
+                }
+                p++;
+                for (int i = 0; i < 49; i++) {
+                    int x = i % 7;
+                    int y = i / 7;
+                    p[0][y][x] = rot_patterns[j].t[6 - x][y];
+                }
+                p++;
+            } else {
+                SDL_assert(rot == 4);
+                for (int k = 0; k < 4; k++) {
+                    for (int i = 0; i < 49; i++) {
+                        int x = i % 7;
+                        int y = i / 7;
+                        switch (k) {
+                            case 0: p[0][y][x] = rot_patterns[j].t[y][x]; break;
+                            case 1: p[0][x][6-y] = rot_patterns[j].t[y][x]; break;
+                            case 2: p[0][6-y][6-x] = rot_patterns[j].t[y][x]; break;
+                            case 3: p[0][6-x][y] = rot_patterns[j].t[y][x]; break;
+                        }
+                    }
+                    p++;
+                }
+            }
+
+        }
+
+        SDL_assert(xpatterns + num_xpat == p);
     }
-    // border
+
     for (int y = 0; y < ROWS; y++) {
         for (int x = 0; x < COLS; x++) {
             if (x == 0 || y == 0 || x == COLS - 1 || y == ROWS - 1) {
                 map[y][x].type = TILE_TYPE_WALL;
             } else {
-                map[y][x].type = TILE_TYPE_FLOOR;
+                map[y][x].type = TILE_TYPE_NOTHING;
             }
         }
     }
 
-    int coords[COLS * ROWS];
-    for (int n = 0; n < COLS * ROWS; n++) coords[n] = n;
-    for (int n = 0; n < COLS * ROWS; n++) {
-        int k = random_range(0, COLS * ROWS - 1);
-        if (n != k) {
-            int tmp = coords[n];
-            coords[n] = coords[k];
-            coords[k] = tmp;
-        }
-    }
+    unsigned int num_patterns = SDL_arraysize(patterns) / 7;
 
-    for (int n = 0; n < 100; n++) {
-        int w = random_range(8, 20);
-        int h = random_range(5, 11);
+    for (int row = 0; row < NUM_ROW_PATTERN; row++) {
+        for (int col = 0; col < NUM_COL_PATTERN; col++) {
 
-        for (int k = 0; k < COLS * ROWS; k++) {
+            for (;;) {
 
-            int x = coords[k] % COLS;
-            int y = coords[k] / COLS;
+                int my = row * 6;
+                int mx = col * 6;
 
-            if (x + w > COLS || y + h > ROWS)
-                continue;
+                // int pattern = random(num_patterns);
+                // char** p = &patterns[pattern * 7];
+                int pattern = random(num_xpat);
+                char(*p)[7][7] = &xpatterns[pattern];
 
-            if (can_room_placed(&(struct room) { x, y, w, h }))
-            {
-                // dig it
-                for (int j = 0; j < h; j++) {
-                    for (int i = 0; i < w; i++) {
-                        map[y + j][x + i].type = (i == 0 || j == 0 || i == w - 1 || j == h - 1) ? TILE_TYPE_WALL : TILE_TYPE_FLOOR;
+                bool ok = true;
+                for (int j = 0; j < 7; j++) {
+                    for (int i = 0; i < 7; i++) {
+
+                        if (i > 0 && j > 0 && i < 6 && j < 6)
+                            continue;
+
+                        // if (j > 0 && col < NUM_COL_PATTERN - 1 && i == 6)
+                        //     continue;
+                        // if (i > 0 && row < NUM_ROW_PATTERN - 1 && j == 6)
+                        //     continue;
+
+                        enum tile_type t = map[my + j][mx + i].type;
+
+                        // if (col == 0 && i == 0)
+                        //     t = TILE_TYPE_WALL;
+                        // else if (col == NUM_COL_PATTERN - 1 && i == 7 - 1)
+                        //     t = TILE_TYPE_WALL;
+
+                        // if (row == 0 && j == 0)
+                        //     t = TILE_TYPE_WALL;
+                        // else if (row == NUM_ROW_PATTERN - 1 && j == 7 - 1)
+                        //     t = TILE_TYPE_WALL;
+
+                        switch (p[0][j][i]) {
+                            case 'x':
+                                ok = t == TILE_TYPE_NOTHING || t == TILE_TYPE_WALL;
+                                break;
+                            case ' ':
+                                ok = t == TILE_TYPE_NOTHING || t == TILE_TYPE_FLOOR;
+                                break;
+                            default:
+                                SDL_assert(false);
+                                break;
+                        }
+
+                        if (!ok)
+                            break;
+
                     }
+
+                    if (!ok)
+                        break;
                 }
-                break;
+
+                if (ok) {
+
+                    for (int j = 0; j < 7; j++) {
+                        for (int i = 0; i < 7; i++) {
+                            map[my + j][mx + i].type = p[0][j][i] == 'x' ? TILE_TYPE_WALL : (p[0][j][i] == ' ' ? TILE_TYPE_FLOOR : TILE_TYPE_NOTHING);
+                        }
+                    }
+
+                    #if 0
+                    dump_map();
+                    #endif
+
+                    break;
+                }
             }
+
         }
 
     }
-
 }
+
+// // border
+// for (int y = 0; y < ROWS; y++) {
+//     for (int x = 0; x < COLS; x++) {
+//         if (x == 0 || y == 0 || x == COLS - 1 || y == ROWS - 1) {
+//             map[y][x].type = TILE_TYPE_WALL;
+//         } else {
+//             map[y][x].type = TILE_TYPE_FLOOR;
+//         }
+//     }
+// }
+
+// int coords[COLS * ROWS];
+// for (int n = 0; n < COLS * ROWS; n++) coords[n] = n;
+// for (int n = 0; n < COLS * ROWS; n++) {
+//     int k = random_range(0, COLS * ROWS - 1);
+//     if (n != k) {
+//         int tmp = coords[n];
+//         coords[n] = coords[k];
+//         coords[k] = tmp;
+//     }
+// }
+
+// for (int n = 0; n < 100; n++) {
+//     int w = random_range(8, 20);
+//     int h = random_range(5, 11);
+
+//     for (int k = 0; k < COLS * ROWS; k++) {
+
+//         int x = coords[k] % COLS;
+//         int y = coords[k] / COLS;
+
+//         if (x + w > COLS || y + h > ROWS)
+//             continue;
+
+//         if (can_room_placed(&(struct room) { x, y, w, h }))
+//         {
+//             // dig it
+//             for (int j = 0; j < h; j++) {
+//                 for (int i = 0; i < w; i++) {
+//                     map[y + j][x + i].type = (i == 0 || j == 0 || i == w - 1 || j == h - 1) ? TILE_TYPE_WALL : TILE_TYPE_FLOOR;
+//                 }
+//             }
+//             break;
+//         }
+//     }
+
+// }
+
 
 int main(int argc, char* argv[])
 {
