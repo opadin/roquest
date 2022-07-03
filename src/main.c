@@ -4,6 +4,34 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
+char* pattern[] = {
+
+    "xxxxxxx",
+    "x      ",
+    "x      ",
+    "x      ",
+    "x      ",
+    "x      ",
+    "x      ",
+
+    "xxxxxxx",
+    "       ",
+    "       ",
+    "       ",
+    "       ",
+    "       ",
+    "       ",
+
+    "       ",
+    "       ",
+    "       ",
+    "       ",
+    "       ",
+    "       ",
+    "       ",
+
+};
+
 // TODO tile-size should be variable
 const int TILE_WIDTH = 8;
 const int TILE_HEIGHT = 16;
@@ -274,6 +302,123 @@ void split_room2(const struct room* room)
     }
 }
 
+bool is_wall_or_outside(int x, int y)
+{
+    return x < 0 || y < 0 || x >= COLS || y >= ROWS || map[y][x].type == TILE_TYPE_WALL;
+}
+
+bool is_tile_valid(int x, int y)
+{
+    return x >= 0 && y >= 0 && x < COLS&& y < ROWS;
+}
+
+bool is_tile_of_type(int x, int y, enum tile_type type)
+{
+    return is_tile_valid(x, y) ? map[y][x].type == type : type == TILE_TYPE_NOTHING;
+}
+
+bool is_area_empty(int x, int y, int w, int h)
+{
+    for (int j = 0; j < h; j++) {
+        for (int i = 0; i < w; i++) {
+            if (is_wall_or_outside(x + i, y + j))
+                return false;
+        }
+    }
+    return true;
+}
+
+bool is_area_of_type(int x, int y, int w, int h, enum tile_type type)
+{
+    for (int j = 0; j < h; j++) {
+        for (int i = 0; i < w; i++) {
+            if (!is_tile_of_type(x+i, y+j, type))
+                return false;
+        }
+    }
+    return true;
+}
+
+bool can_room_placed(const struct room* room)
+{
+    int x1 = room->x;
+    int x2 = room->x + room->w;
+    int y1 = room->y;
+    int y2 = room->y + room->h;
+
+    if (x1 == 0 && y1 == 0) {
+        int m = 7;
+    }
+
+    if (x1 > 0 && x1 < 7) return false;
+    if (y1 > 0 && y1 < 4) return false;
+    if (x2 < COLS && x2 > COLS - 7)return false;
+    if (y2 < ROWS && y2 > ROWS - 4) return false;
+
+    if (x1 > 0) {
+
+        // top-left area
+        if (y1 > 0) {
+            if (!is_area_of_type(x1 - 3, y1 - 3, 3, 3, TILE_TYPE_FLOOR))
+                return false;
+        }
+
+        // left area
+        // top - can be complete wall or complete not wall
+        if (!is_area_of_type(x1 - 3, y1, 3, 1, TILE_TYPE_WALL) && !is_area_of_type(x1 - 1, y1, 3, 1, TILE_TYPE_FLOOR))
+            return false;
+        if (!is_area_of_type(x1 - 3, y1 + 1, 3, 3, TILE_TYPE_FLOOR))
+            return false;
+        if (y1 + 4 < y2 - 4)
+            
+            if (!is_area_empty(x1 - 3, y2 - 4, 3, 4))
+            return false;
+
+        //bot-left area
+        if (y2 < ROWS) {
+            if (!is_area_empty(x1 - 3, y2, 3, 3))
+                return false;
+        }
+    }
+
+    if (y1 > 0) {
+        // top area
+        if (!is_area_empty(x1, y1 - 3, 4, 3))
+            return false;
+        if (!is_area_empty(x2 - 4, y1-3,  4, 3))
+            return false;
+    }
+
+    if (y2 < ROWS) {
+        // bot area
+        if (!is_area_empty(x1, y2, 4, 3))
+            return false;
+        if (!is_area_empty(x2 - 4, y2, 4, 3))
+            return false;
+    }
+
+    if (x2 < COLS) {
+        if (y1 > 0) {
+            // top-right
+            if (!is_area_empty(x2, y1 - 3, 3, 3))
+                return false;
+        }
+        // right
+        if (!is_area_empty(x2, y1, 3, 4))
+            return false;
+        if (!is_area_empty(x2, y2 - 4, 3, 4))
+            return false;
+
+        if (y2 < ROWS) {
+            // bot-right
+            if (!is_area_empty(x2, y2, 3, 3))
+                return false;
+        }
+    }
+
+    return true;
+}
+
 void create_map()
 {
     for (int y = 0; y < ROWS; y++) {
@@ -292,14 +437,42 @@ void create_map()
         }
     }
 
-    // for (int n = 0; n < 1; n++) {
+    int coords[COLS * ROWS];
+    for (int n = 0; n < COLS * ROWS; n++) coords[n] = n;
+    for (int n = 0; n < COLS * ROWS; n++) {
+        int k = random_range(0, COLS * ROWS - 1);
+        if (n != k) {
+            int tmp = coords[n];
+            coords[n] = coords[k];
+            coords[k] = tmp;
+        }
+    }
 
-    //     int w = random_range(7, 13);
-    //     int h = random_range(4, 7);
+    for (int n = 0; n < 100; n++) {
+        int w = random_range(8, 20);
+        int h = random_range(5, 11);
 
-    // }
+        for (int k = 0; k < COLS * ROWS; k++) {
 
-    split_room2(&(struct room) { 1, 1, COLS - 2, ROWS - 2 });
+            int x = coords[k] % COLS;
+            int y = coords[k] / COLS;
+
+            if (x + w > COLS || y + h > ROWS)
+                continue;
+
+            if (can_room_placed(&(struct room) { x, y, w, h }))
+            {
+                // dig it
+                for (int j = 0; j < h; j++) {
+                    for (int i = 0; i < w; i++) {
+                        map[y + j][x + i].type = (i == 0 || j == 0 || i == w - 1 || j == h - 1) ? TILE_TYPE_WALL : TILE_TYPE_FLOOR;
+                    }
+                }
+                break;
+            }
+        }
+
+    }
 
 }
 
