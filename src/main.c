@@ -12,13 +12,23 @@ const int ZOOMX = 1;
 const int ZOOMY = 1;
 
 #define COLS  80
-#define ROWS  35
+#define ROWS  45
 
 #define SCREEN_COLS ((COLS)+20)
 #define SCREEN_ROWS ((ROWS)+5)
 
 const int WINDOW_WIDTH = TILE_WIDTH * SCREEN_COLS;
 const int WINDOW_HEIGHT = TILE_HEIGHT * SCREEN_ROWS;
+
+const int MAX_ROOMS_PER_MAP = 30;
+
+enum direction {
+    DIR_NOTHING = 0,
+    DIR_DOWN = 1,
+    DIR_LEFT = 2,
+    DIR_RIGHT = 3,
+    DIR_UP = 4
+};
 
 struct global {
     SDL_Window* window;
@@ -186,7 +196,7 @@ void render()
                     }
                     break;
                 case TILE_TYPE_NOTHING:
-                    render_tile(sx + x, sy + y, 0xdb, (struct color) { 0, 0, 0 });
+                    render_tile(sx + x, sy + y, 0xdb, (struct color) { 31, 31, 31 });
                     break;
                 default:
                     // something wrong!
@@ -221,8 +231,14 @@ int random_range(int included_min, int included_max)
 }
 
 struct room {
-    int x, y, w, h;
+    int ax, ay, bx, by;
 };
+
+void hline(int x, int y, int len)
+{
+    for (int j = 0; j < len; j++)
+        map[y][x + j].type = TILE_TYPE_FLOOR;
+}
 
 void create_map()
 {
@@ -235,8 +251,104 @@ void create_map()
             }
         }
     }
+
+    for (int y = 0; y < ROWS; y++) {
+        for (int x = 0; x < COLS; x++) {
+            map[y][x].type = TILE_TYPE_WALL;
+        }
+    }
+
+    struct room rooms[MAX_ROOMS_PER_MAP];
+    int num_rooms = 0;
+
+    for (int n = 0; n < MAX_ROOMS_PER_MAP; n++) {
+
+        int w = random_range(6, 10);
+        int h = random_range(4, 6);
+        int x = random_range(1, COLS - w - 1);
+        int y = random_range(1, ROWS - h - 1);
+
+        bool intersects = false;
+        for (int i = 0; i < num_rooms; i++) {
+            if (rooms[i].bx >= x && rooms[i].ax <= x + w && rooms[i].by >= y && rooms[i].ay <= y + h) {
+                intersects = true;
+                break;
+            }
+        }
+
+        if (!intersects) {
+
+            for (int j = 0; j < h; j++) {
+                for (int i = 0; i < w; i++) {
+                    // if (j == 0) {
+                    //     map[y + j - 1][x + i].type = TILE_TYPE_WALL;
+                    // }
+                    map[y + j][x + i].type = TILE_TYPE_FLOOR;
+                }
+            }
+
+            if (num_rooms == 0) {
+                g.player_x = x + w / 2; if ((w & 1) == 0) g.player_x -= random(2);
+                g.player_y = y + h / 2; if ((h & 1) == 0) g.player_y -= random(2);
+            } else {
+                struct room* prev_room = &rooms[num_rooms - 1];
+
+                // prev center
+                int pcx = (prev_room->ax + prev_room->bx) / 2;
+                int pcy = (prev_room->ay + prev_room->by) / 2;
+
+                // new room center
+                int ncx = x + w / 2;
+                int ncy = y + h / 2;
+
+                // tunnel first hor or vert?
+                bool horizontal = random(100) < 50;
+
+                // coords
+                int kx, ky;
+                if (horizontal) {
+                    kx = ncx;
+                    ky = pcy;
+                } else {
+                    kx = pcx;
+                    ky = ncy;
+                }
+
+                for (;;) {
+                    map[ky][pcx].type = TILE_TYPE_FLOOR;
+                    if (pcx == ncx)
+                        break;
+                    if (pcx < ncx) pcx++; else pcx--;
+                };
+
+                for (;;) {
+                    map[pcy][kx].type = TILE_TYPE_FLOOR;
+                    if (pcy == ncy)
+                        break;
+                    if (pcy < ncy) pcy++; else pcy--;
+                }
+            }
+
+            rooms[num_rooms++] = (struct room){ .ax = x, .ay = y, .bx = x + w, .by = y + h };
+
+        }
+    }
 }
 
+bool map_valid(int x, int y)
+{
+    x >= 0 && x < COLS&& y >= 0 && y < ROWS;
+}
+
+void move_player(enum direction dir)
+{
+    int nx = g.player_x + (dir == DIR_RIGHT ? 1 : (dir == DIR_LEFT ? -1 : 0));
+    int ny = g.player_y + (dir == DIR_DOWN ? 1 : (dir == DIR_UP ? -1 : 0));
+    if (map_valid(nx, ny) && map[ny][nx].type == TILE_TYPE_FLOOR) {
+        g.player_x = nx;
+        g.player_y = ny;
+    }
+}
 
 int main(int argc, char* argv[])
 {
@@ -260,8 +372,6 @@ int main(int argc, char* argv[])
 
     random_seed = 1;
     create_map();
-    g.player_x = COLS / 2;
-    g.player_y = ROWS / 2;
 
     SDL_Event event;
     bool quit_requested = false;
@@ -281,16 +391,16 @@ int main(int argc, char* argv[])
                         default:
                             switch (event.key.keysym.scancode) {
                                 case SDL_SCANCODE_UP:
-                                    if (g.player_y > 0) g.player_y--;
+                                    move_player(DIR_UP);
                                     break;
                                 case SDL_SCANCODE_DOWN:
-                                    if (g.player_y < ROWS - 1) g.player_y++;
+                                    move_player(DIR_DOWN);
                                     break;
                                 case SDL_SCANCODE_LEFT:
-                                    if (g.player_x > 0) g.player_x--;
+                                    move_player(DIR_LEFT);
                                     break;
                                 case SDL_SCANCODE_RIGHT:
-                                    if (g.player_x < COLS - 1) g.player_x++;
+                                    move_player(DIR_RIGHT);
                                 default:
                                     break;
                             }
