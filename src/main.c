@@ -8,8 +8,12 @@
 const int TILE_WIDTH = 8;
 const int TILE_HEIGHT = 16;
 
-const int WINDOW_WIDTH = TILE_WIDTH * 100;
-const int WINDOW_HEIGHT = TILE_HEIGHT * 34;
+#define GW 18
+#define GH 12
+#define GFW ((GW) * 2 + 1)
+#define GFH ((GH) * 2 + 1)
+
+int gfield[GFH][GFW];
 
 const int ZOOMX = 1;
 const int ZOOMY = 1;
@@ -17,8 +21,11 @@ const int ZOOMY = 1;
 #define NUM_COL_PATTERN 10
 #define NUM_ROW_PATTERN 5
 
-#define COLS  (7 + (NUM_COL_PATTERN-1) * 6)
-#define ROWS  (7 + (NUM_ROW_PATTERN-1) * 6)
+#define COLS  ((GW) * 6 + 1)
+#define ROWS  ((GH) * 4 + 1)
+
+const int WINDOW_WIDTH = (TILE_WIDTH) * ((COLS)+4);
+const int WINDOW_HEIGHT = (TILE_HEIGHT) * ((ROWS)+4);
 
 struct global {
     SDL_Window* window;
@@ -728,202 +735,329 @@ char* patterns[] = {
 static char(*xpatterns)[7][7];
 static int num_xpat;
 
-void create_map()
+int field_val(int col, int row)
 {
-    if (!xpatterns) {
+    return
+        128 * gfield[row - 1][col - 1]
+        + 64 * gfield[row][col - 1]
+        + 32 * gfield[row + 1][col - 1]
+        + 16 * gfield[row + 1][col]
+        + 8 * gfield[row + 1][col + 1]
+        + 4 * gfield[row][col + 1]
+        + 2 * gfield[row - 1][col + 1]
+        + gfield[row - 1][col];
+}
 
-        num_xpat = 0;
-        for (int j = 0; j < SDL_arraysize(rot_patterns); j++) {
-            num_xpat += rot_patterns[j].rot;
-        }
+int fieldd(int col, int row)
+{
+    // may be outside field ... return value at col row
+    col = col < 0 ? col + GFW : (col >= GFW ? col - GFW : col);
+    row = row < 0 ? row + GFH : (row >= GFH ? row - GFH : row);
+    return gfield[row][col];
+}
 
-        xpatterns = malloc(7 * 7 * num_xpat);
-
-        char(*p)[7][7] = xpatterns;
-        for (int j = 0; j < SDL_arraysize(rot_patterns); j++) {
-
-            int rot = rot_patterns[j].rot;
-
-            if (rot == 1) {
-                for (int i = 0; i < 49; i++) {
-                    int x = i % 7;
-                    int y = i / 7;
-                    p[0][y][x] = rot_patterns[j].t[y][x];
-                }
-                p++;
-            } else if (rot == 2) {
-                for (int i = 0; i < 49; i++) {
-                    int x = i % 7;
-                    int y = i / 7;
-                    p[0][y][x] = rot_patterns[j].t[y][x];
-                }
-                p++;
-                for (int i = 0; i < 49; i++) {
-                    int x = i % 7;
-                    int y = i / 7;
-                    p[0][y][x] = rot_patterns[j].t[6 - x][y];
-                }
-                p++;
-            } else {
-                SDL_assert(rot == 4);
-                for (int k = 0; k < 4; k++) {
-                    for (int i = 0; i < 49; i++) {
-                        int x = i % 7;
-                        int y = i / 7;
-                        switch (k) {
-                            case 0: p[0][y][x] = rot_patterns[j].t[y][x]; break;
-                            case 1: p[0][x][6-y] = rot_patterns[j].t[y][x]; break;
-                            case 2: p[0][6-y][6-x] = rot_patterns[j].t[y][x]; break;
-                            case 3: p[0][6-x][y] = rot_patterns[j].t[y][x]; break;
-                        }
-                    }
-                    p++;
-                }
-            }
-
-        }
-
-        SDL_assert(xpatterns + num_xpat == p);
+struct cell_template {
+    int val;
+    const char* t;
+} templates[] = {
+    {
+        .val = 1,
+        .t =
+        "xxx xxx"
+        "x     x"
+        "x     x"
+        "x     x"
+        "xxxxxxx"
+    },
+    {
+        .val = 4,
+        .t =
+        "xxxxxxx"
+        "x     x"
+        "x      "
+        "x     x"
+        "xxxxxxx"
+    },
+    {
+        .val = 5,
+        .t =
+        "xxx xxx"
+        "x     x"
+        "x      "
+        "x     x"
+        "xxxxxxx"
+    },
+    {
+        .val = 7,
+        .t =
+        "x      "
+        "x      "
+        "x      "
+        "x      "
+        "xxxxxxx"
+    },
+    {
+        .val = 17,
+        .t =
+        "xxx xxx"
+        "x     x"
+        "x     x"
+        "x     x"
+        "xxx xxx"
+    },
+    {
+        .val = 20,
+        .t =
+        "xxxxxxx"
+        "x     x"
+        "x      "
+        "x     x"
+        "xxx xxx"
+    },
+    {
+        .val = 28,
+        .t =
+        "xxxxxxx"
+        "x      "
+        "x      "
+        "x      "
+        "x      "
+    },
+    {
+        .val = 71,
+        .t =
+        "x      "
+        "x      "
+        "       "
+        "x      "
+        "xxxxxxx"
+    },
+    {
+        .val = 92,
+        .t =
+        "xxxxxxx"
+        "x      "
+        "       "
+        "x      "
+        "x      "
+    },
+    {
+        .val = 112,
+        .t =
+        "xxxxxxx"
+        "      x"
+        "      x"
+        "      x"
+        "      x"
     }
+};
 
-    for (int y = 0; y < ROWS; y++) {
-        for (int x = 0; x < COLS; x++) {
-            if (x == 0 || y == 0 || x == COLS - 1 || y == ROWS - 1) {
-                map[y][x].type = TILE_TYPE_WALL;
-            } else {
-                map[y][x].type = TILE_TYPE_NOTHING;
-            }
-        }
-    }
+void putcell(int col, int row)
+{
+    int val = field_val(col, row);
+    gfield[row][col] = val;
+    // update image ...
+    int mx = (col / 2) * 6;
+    int my = (row / 2) * 4;
 
-    unsigned int num_patterns = SDL_arraysize(patterns) / 7;
+    // char k[5 * 7];
 
-    for (int row = 0; row < NUM_ROW_PATTERN; row++) {
-        for (int col = 0; col < NUM_COL_PATTERN; col++) {
+    // if (val == 0) {
+    //     for (int n = 0; n < 5 * 7; n++)
+    //         k[n] = 'x';
+    // } else if (val == 255) {
+    //     for (int n = 0; n < 5 * 7; n++)
+    //         k[n] = ' ';
+    // } else {
+    //     for (int y = 1; y < 4; y++) {
+    //         for (int x = 1; x < 6; x++) map[my + y][mx + x].type = TILE_TYPE_FLOOR;
+    //     }
+    // }
 
-            for (;;) {
+    // const char* t = NULL;
+    // for (int n = 0; n < SDL_arraysize(templates); n++) {
+    //     if (templates[n].val == val) {
+    //         t = templates[n].t;
+    //     }
+    // }
 
-                int my = row * 6;
-                int mx = col * 6;
+    // if (t) {
+    //     for (int y = 0; y < 5; y++) {
+    //         for (int x = 0; x < 7; x++) {
+    //             map[my + y][mx + x].type = t[y * 7 + x] == 'x' ? TILE_TYPE_WALL : TILE_TYPE_FLOOR;
+    //         }
+    //     }
+    // } else 
+    {
+        bool nFloor = (val & 1);
+        bool neFloor = (val & 2);
+        bool nwFloor = (val & 128);
+        bool wFloor = (val & 64);
+        bool swFloor = (val & 32);
+        bool eFloor = (val & 4);
+        bool seFloor = (val & 8);
+        bool sFloor = (val & 16);
 
-                // int pattern = random(num_patterns);
-                // char** p = &patterns[pattern * 7];
-                int pattern = random(num_xpat);
-                char(*p)[7][7] = &xpatterns[pattern];
+        bool way = !neFloor && !nwFloor && !swFloor && !seFloor;
 
-                bool ok = true;
-                for (int j = 0; j < 7; j++) {
-                    for (int i = 0; i < 7; i++) {
-
-                        if (i > 0 && j > 0 && i < 6 && j < 6)
-                            continue;
-
-                        // if (j > 0 && col < NUM_COL_PATTERN - 1 && i == 6)
-                        //     continue;
-                        // if (i > 0 && row < NUM_ROW_PATTERN - 1 && j == 6)
-                        //     continue;
-
-                        enum tile_type t = map[my + j][mx + i].type;
-
-                        // if (col == 0 && i == 0)
-                        //     t = TILE_TYPE_WALL;
-                        // else if (col == NUM_COL_PATTERN - 1 && i == 7 - 1)
-                        //     t = TILE_TYPE_WALL;
-
-                        // if (row == 0 && j == 0)
-                        //     t = TILE_TYPE_WALL;
-                        // else if (row == NUM_ROW_PATTERN - 1 && j == 7 - 1)
-                        //     t = TILE_TYPE_WALL;
-
-                        switch (p[0][j][i]) {
-                            case 'x':
-                                ok = t == TILE_TYPE_NOTHING || t == TILE_TYPE_WALL;
-                                break;
-                            case ' ':
-                                ok = t == TILE_TYPE_NOTHING || t == TILE_TYPE_FLOOR;
-                                break;
-                            default:
-                                SDL_assert(false);
-                                break;
-                        }
-
-                        if (!ok)
-                            break;
-
-                    }
-
-                    if (!ok)
-                        break;
-                }
-
-                if (ok) {
-
-                    for (int j = 0; j < 7; j++) {
-                        for (int i = 0; i < 7; i++) {
-                            map[my + j][mx + i].type = p[0][j][i] == 'x' ? TILE_TYPE_WALL : (p[0][j][i] == ' ' ? TILE_TYPE_FLOOR : TILE_TYPE_NOTHING);
-                        }
-                    }
-
-                    #if 0
-                    dump_map();
-                    #endif
-
-                    break;
+        if (way) {
+            for (int y = 0; y < 5; y++) {
+                for (int x = 0; x < 7; x++) {
+                    map[my + y][mx + x].type = TILE_TYPE_WALL;
                 }
             }
 
-        }
+            if (nFloor) {
+                map[my + 0][mx + 3].type = map[my + 0][mx + 4].type = TILE_TYPE_FLOOR;
+                map[my + 1][mx + 3].type = map[my + 1][mx + 4].type = TILE_TYPE_FLOOR;
+                map[my + 2][mx + 3].type = map[my + 2][mx + 4].type = TILE_TYPE_FLOOR;
+            }
+            if (sFloor) {
+                map[my + 2][mx + 3].type = map[my + 2][mx + 4].type = TILE_TYPE_FLOOR;
+                map[my + 3][mx + 3].type = map[my + 3][mx + 4].type = TILE_TYPE_FLOOR;
+                map[my + 4][mx + 3].type = map[my + 4][mx + 4].type = TILE_TYPE_FLOOR;
+            }
+            if (wFloor) {
+                map[my + 2][mx + 0].type = TILE_TYPE_FLOOR;
+                map[my + 2][mx + 1].type = TILE_TYPE_FLOOR;
+                map[my + 2][mx + 2].type = TILE_TYPE_FLOOR;
+                map[my + 2][mx + 3].type = TILE_TYPE_FLOOR;
+            }
+            if (eFloor) {
+                map[my + 2][mx + 3].type = TILE_TYPE_FLOOR;
+                map[my + 2][mx + 4].type = TILE_TYPE_FLOOR;
+                map[my + 2][mx + 5].type = TILE_TYPE_FLOOR;
+                map[my + 2][mx + 6].type = TILE_TYPE_FLOOR;
+            }
+        } else {
 
+            map[my][mx + 0].type = nwFloor ? TILE_TYPE_FLOOR : TILE_TYPE_WALL;
+            map[my][mx + 1].type = map[my][mx + 2].type = (!nFloor || (!neFloor && !nwFloor)) ? TILE_TYPE_WALL : TILE_TYPE_FLOOR;
+            map[my][mx + 3].type = map[my][mx + 4].type = nFloor ? TILE_TYPE_FLOOR : TILE_TYPE_WALL;
+            map[my][mx + 5].type = (!nFloor || (!neFloor && !nwFloor)) ? TILE_TYPE_WALL : TILE_TYPE_FLOOR;
+            map[my][mx + 6].type = neFloor ? TILE_TYPE_FLOOR : TILE_TYPE_WALL;
+
+            map[my + 1][mx + 0].type = (!wFloor || (!nwFloor && !swFloor)) ? TILE_TYPE_WALL : TILE_TYPE_FLOOR;
+            map[my + 2][mx + 0].type = wFloor ? TILE_TYPE_FLOOR : TILE_TYPE_WALL;
+            map[my + 3][mx + 0].type = (!wFloor || (!nwFloor && !swFloor)) ? TILE_TYPE_WALL : TILE_TYPE_FLOOR;
+            
+            map[my + 1][mx + 6].type = (!eFloor || (!neFloor && !seFloor)) ? TILE_TYPE_WALL : TILE_TYPE_FLOOR;
+            map[my + 2][mx + 6].type = eFloor ? TILE_TYPE_FLOOR : TILE_TYPE_WALL;
+            map[my + 3][mx + 6].type = (!eFloor || (!neFloor && !seFloor)) ? TILE_TYPE_WALL : TILE_TYPE_FLOOR;
+
+            for (int y = 1; y < 4; y++) {
+                for (int x = 1; x < 6; x++) map[my + y][mx + x].type = TILE_TYPE_FLOOR;
+            }
+
+            map[my + 4][mx + 0].type = swFloor ? TILE_TYPE_FLOOR : TILE_TYPE_WALL;
+            map[my + 4][mx + 1].type = map[my + 4][mx + 2].type = (!sFloor || (!seFloor && !swFloor)) ? TILE_TYPE_WALL : TILE_TYPE_FLOOR;
+            map[my + 4][mx + 3].type = map[my + 4][mx + 4].type = sFloor ? TILE_TYPE_FLOOR : TILE_TYPE_WALL;
+            map[my + 4][mx + 5].type = (!sFloor || (!seFloor && !swFloor)) ? TILE_TYPE_WALL : TILE_TYPE_FLOOR;
+            map[my + 4][mx + 6].type = seFloor ? TILE_TYPE_FLOOR : TILE_TYPE_WALL;
+        }
     }
 }
 
-// // border
-// for (int y = 0; y < ROWS; y++) {
-//     for (int x = 0; x < COLS; x++) {
-//         if (x == 0 || y == 0 || x == COLS - 1 || y == ROWS - 1) {
-//             map[y][x].type = TILE_TYPE_WALL;
-//         } else {
-//             map[y][x].type = TILE_TYPE_FLOOR;
-//         }
-//     }
-// }
+void set_blob_edge(int col, int row, int dx, int dy)
+{
+    gfield[row + dy][col + dx] = 1;
+    // update 2 tiles
+    putcell(col, row);
+    putcell(col + 2 * dx, row + 2 * dy);
+}
 
-// int coords[COLS * ROWS];
-// for (int n = 0; n < COLS * ROWS; n++) coords[n] = n;
-// for (int n = 0; n < COLS * ROWS; n++) {
-//     int k = random_range(0, COLS * ROWS - 1);
-//     if (n != k) {
-//         int tmp = coords[n];
-//         coords[n] = coords[k];
-//         coords[k] = tmp;
-//     }
-// }
+void set_blob_corn(int col, int row, int dx, int dy)
+{
+    gfield[row + dy][col + dx] = 1;
+    gfield[row][col + dx] = 1;
+    gfield[row + dy][col] = 1;
+    gfield[row + dy][col + 2 * dx] = 1;
+    gfield[row + 2 * dy][col + dx] = 1;
+    // update 4 tiles
+    putcell(col, row);
+    putcell(col + 2 * dx, row);
+    putcell(col, row + 2 * dy);
+    putcell(col + 2 * dx, row + 2 * dy);
+}
 
-// for (int n = 0; n < 100; n++) {
-//     int w = random_range(8, 20);
-//     int h = random_range(5, 11);
+void create_map()
+{
+    memset(gfield, 0, sizeof(gfield));
 
-//     for (int k = 0; k < COLS * ROWS; k++) {
+    int rx = random(GW) * 2 + 1;
+    int ry = random(GH) * 2 + 1;
 
-//         int x = coords[k] % COLS;
-//         int y = coords[k] / COLS;
+    struct { int x, y; } path[GW * GH];
+    int num = 0;
 
-//         if (x + w > COLS || y + h > ROWS)
-//             continue;
+    path[num].x = rx;
+    path[num].y = ry;
+    num++;
 
-//         if (can_room_placed(&(struct room) { x, y, w, h }))
-//         {
-//             // dig it
-//             for (int j = 0; j < h; j++) {
-//                 for (int i = 0; i < w; i++) {
-//                     map[y + j][x + i].type = (i == 0 || j == 0 || i == w - 1 || j == h - 1) ? TILE_TYPE_WALL : TILE_TYPE_FLOOR;
-//                 }
-//             }
-//             break;
-//         }
-//     }
+    while (num > 0) {
 
-// }
+        int idx = num - 1;
+        int col = path[idx].x;
+        int row = path[idx].y;
+
+        struct { int x, y; } neighbors[4];
+        int num_neighbors = 0;
+
+        if (row > 2 && gfield[row - 2][col] == 0) { neighbors[num_neighbors].x = 0; neighbors[num_neighbors++].y = -1; }
+        if (col < GFW - 3 && gfield[row][col + 2] == 0) { neighbors[num_neighbors].x = 1; neighbors[num_neighbors++].y = 0; }
+        if (row < GFH - 3 && gfield[row + 2][col] == 0) { neighbors[num_neighbors].x = 0; neighbors[num_neighbors++].y = 1; }
+        if (col > 2 && gfield[row][col - 2] == 0) { neighbors[num_neighbors].x = -1; neighbors[num_neighbors++].y = 0; }
+
+        if (num_neighbors > 0) {
+            int next = random(num_neighbors);
+            int dx = neighbors[next].x;
+            int dy = neighbors[next].y;
+
+            set_blob_edge(col, row, dx, dy);
+
+            int cnt, dxx, dyy;
+            // add up the 3 possible edges to the left
+            cnt = 0;
+            if (gfield[row - dx][col + dy] == 1) { cnt += 1; }
+            if (fieldd(col + dx + 2 * dy, row - 2 * dx + dy) == 1) { cnt += 1; }
+            if (fieldd(col + 2 * dx + dy, row - dx + 2 * dy) == 1) { cnt += 1; }
+            if (cnt == 2) {  // then 3 edges
+                if (dx == 0) { dxx = dy; } else { dxx = dx; }
+                if (dy == 0) { dyy = -dx; } else { dyy = dy; }
+                set_blob_corn(col, row, dxx, dyy);
+            }
+            // add up the 3 possible edges to the rite
+            cnt = 0;
+            if (gfield[row + dx][col - dy] == 1) { cnt += 1; }
+            if (fieldd(col + dx - 2 * dy, row + 2 * dx + dy) == 1) { cnt += 1; }
+            if (fieldd(col + 2 * dx - dy, row + dx + 2 * dy) == 1) { cnt += 1; }
+            if (cnt == 2) {  // then 3 edges
+                if (dx == 0) { dxx = -dy; } else { dxx = dx; }
+                if (dy == 0) { dyy = dx; } else { dyy = dy; }
+                set_blob_corn(col, row, dxx, dyy);
+            }
+
+            path[num].x = col + 2 * dx;
+            path[num++].y = row + 2 * dy;
+        } else {  // no neighbors
+            num--;
+        }
+    }
+
+    int k = 7;
+
+    // for (int y = 0; y < ROWS; y++) {
+    //     for (int x = 0; x < COLS; x++) {
+    //         if (x == 0 || y == 0 || x == COLS - 1 || y == ROWS - 1) {
+    //             map[y][x].type = TILE_TYPE_WALL;
+    //         } else {
+    //             map[y][x].type = TILE_TYPE_FLOOR;
+    //         }
+    //     }
+    // }
+
+
+}
 
 
 int main(int argc, char* argv[])
