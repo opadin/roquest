@@ -23,6 +23,8 @@ const int WINDOW_HEIGHT = TILE_HEIGHT * SCREEN_ROWS;
 const int MAX_ROOMS_PER_MAP = 30;
 const int VIEW_RADIUS = 10;
 
+#define MAX_ENTS 128
+
 enum direction {
     DIR_NOTHING = 0,
     DIR_DOWN = 1,
@@ -35,8 +37,6 @@ struct global {
     SDL_Window* window;
     SDL_Renderer* renderer;
     SDL_Texture* font;
-    int player_x;
-    int player_y;
 };
 
 struct global g;
@@ -60,6 +60,15 @@ struct map_tile {
 };
 
 static struct map_tile map[ROWS][COLS];
+
+struct ent {
+    bool used;
+    int ch;
+    int x, y;
+};
+
+// ent #0 is player
+static struct ent ents[MAX_ENTS];
 
 int maxi(int a, int b) { return a >= b ? a : b; }
 int mini(int a, int b) { return a <= b ? a : b; }
@@ -226,8 +235,19 @@ void render()
         }
     }
 
-    // player
-    render_tile(sx + g.player_x, sy + g.player_y, '@', (struct color) { 255, 255, 255 }, 1);
+    // player + monsters
+    for (int k = 0; k < MAX_ENTS; k++) {
+        if (ents[k].used && map[ents[k].y][ents[k].x].visible) {
+            struct color c;
+            switch (ents[k].ch) {
+                case '@': c = (struct color){ 255, 255, 255 }; break;
+                case 'o': c = (struct color){ 191, 191, 0 }; break;
+                case 'T': c = (struct color){ 255, 255, 0 }; break;
+                default: c = (struct color){ 255, 0, 0 }; break;
+            }
+            render_tile(sx + ents[k].x, sy + ents[k].y, ents[k].ch, c, 1);
+        }
+    }
 }
 
 static uint32_t random_seed = 0x17041971;
@@ -279,6 +299,9 @@ void create_map()
         }
     }
 
+    for (int n = 0; n < MAX_ENTS; n++)
+        ents[n].used = 0;
+
     struct room rooms[MAX_ROOMS_PER_MAP];
     int num_rooms = 0;
 
@@ -309,8 +332,12 @@ void create_map()
             }
 
             if (num_rooms == 0) {
-                g.player_x = x + w / 2; if ((w & 1) == 0) g.player_x -= random(2);
-                g.player_y = y + h / 2; if ((h & 1) == 0) g.player_y -= random(2);
+                ents[0] = (struct ent) {
+                    .used = 1,
+                    .x = x + w / 2,
+                    .y = y + h / 2,
+                    .ch = '@'
+                };
             } else {
                 struct room* prev_room = &rooms[num_rooms - 1];
 
@@ -348,10 +375,38 @@ void create_map()
                         break;
                     if (pcy < ncy) pcy++; else pcy--;
                 }
+
+
             }
 
             rooms[num_rooms++] = (struct room){ .ax = x, .ay = y, .bx = x + w, .by = y + h };
+            SDL_Log("Room %d : %d/%d-%d/%d", num_rooms, x, y, w, h);
 
+            // spawn monsters
+            int num_monsters = random(3);
+            for (int i = 0; i < num_monsters; i++) {
+                int ex = x + random(w);
+                int ey = y + random(h);
+                bool found = false;
+                for (int k = 0; k < MAX_ENTS; k++) {
+                    if (ents[k].used && ents[k].x == x && ents[k].y == y) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    int k = 0;
+                    while (k < MAX_ENTS && ents[k].used)
+                        k++;
+                    if (k < MAX_ENTS) {
+                        ents[k].used = 1;
+                        ents[k].x = ex;
+                        ents[k].y = ey;
+                        ents[k].ch = random(100) < 80 ? 'o' : 'T';
+                        SDL_Log("  Mon#%d : %c (%d/%d)", k, ents[k].ch, ents[k].x, ents[k].y);
+                    }
+                }
+            }
         }
     }
 }
@@ -369,13 +424,13 @@ void update_fov()
         }
     }
 
-    for (int i = 0; i < 360*8; i++)
+    for (int i = 0; i < 360 * 8; i++)
     {
         float x = cos((float)i * 0.01745f);
         float y = sin((float)i * 0.01745f);
 
-        float ox = (float)g.player_x + 0.5f;
-        float oy = (float)g.player_y + 0.5f;
+        float ox = (float)ents[0].x + 0.5f;
+        float oy = (float)ents[0].y + 0.5f;
         for (int j = 0; j < VIEW_RADIUS; j++)
         {
             int mx = (int)ox;
@@ -394,11 +449,17 @@ void update_fov()
 
 void move_player(enum direction dir)
 {
-    int nx = g.player_x + (dir == DIR_RIGHT ? 1 : (dir == DIR_LEFT ? -1 : 0));
-    int ny = g.player_y + (dir == DIR_DOWN ? 1 : (dir == DIR_UP ? -1 : 0));
+    int nx = ents[0].x + (dir == DIR_RIGHT ? 1 : (dir == DIR_LEFT ? -1 : 0));
+    int ny = ents[0].y + (dir == DIR_DOWN ? 1 : (dir == DIR_UP ? -1 : 0));
     if (map_valid(nx, ny) && map[ny][nx].type == TILE_TYPE_FLOOR) {
-        g.player_x = nx;
-        g.player_y = ny;
+        for (int n = 1; n < MAX_ENTS; n++) {
+            if (ents[n].used && ents[n].x == nx && ents[n].y == ny) {
+                SDL_Log("You kick the %c, much to its annoyance!", ents[n].ch);
+                return;
+            }
+        }
+        ents[0].x = nx;
+        ents[0].y = ny;
     }
 }
 
