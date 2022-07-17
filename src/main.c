@@ -21,6 +21,7 @@ const int WINDOW_WIDTH = TILE_WIDTH * SCREEN_COLS;
 const int WINDOW_HEIGHT = TILE_HEIGHT * SCREEN_ROWS;
 
 const int MAX_ROOMS_PER_MAP = 30;
+const int VIEW_RADIUS = 10;
 
 enum direction {
     DIR_NOTHING = 0,
@@ -51,10 +52,17 @@ struct color {
 };
 
 struct map_tile {
+    struct {
+        int visible : 1;
+        int explored : 1;
+    };
     enum tile_type type;
 };
 
 static struct map_tile map[ROWS][COLS];
+
+int maxi(int a, int b) { return a >= b ? a : b; }
+int mini(int a, int b) { return a <= b ? a : b; }
 
 void dump_map()
 {
@@ -149,7 +157,7 @@ SDL_Texture* load_image(const char* file, int* w, int* h)
     return texture;
 }
 
-void render_tile(int x, int y, int ch, struct color color)
+void render_tile(int x, int y, int ch, struct color color, bool visible)
 {
     ch &= 0xff;
     int srcx = (ch % 16) * TILE_WIDTH;
@@ -157,15 +165,21 @@ void render_tile(int x, int y, int ch, struct color color)
     int dstx = x * TILE_WIDTH * ZOOMX;
     int dsty = y * TILE_HEIGHT * ZOOMY;
 
+    if (!visible) {
+        color.red = maxi(0, color.red - 70);
+        color.blue = maxi(0, color.blue - 70);
+        color.green = maxi(0, color.green - 70);
+    }
+
     SDL_SetTextureColorMod(g.font, color.red, color.green, color.blue);
     SDL_RenderCopy(g.renderer, g.font, &(SDL_Rect) { srcx, srcy, TILE_WIDTH, TILE_HEIGHT}, & (SDL_Rect) { dstx, dsty, TILE_WIDTH* ZOOMX, TILE_HEIGHT* ZOOMY });
 }
 
-void render_tile_with_bg(int x, int y, int ch, struct color fg, struct color bg)
+void render_tile_with_bg(int x, int y, int ch, struct color fg, struct color bg, bool visible)
 {
 
-    render_tile(x, y, 0xdb, fg);
-    render_tile(x, y, ch, bg);
+    render_tile(x, y, 0xdb, fg, visible);
+    render_tile(x, y, ch, bg, visible);
 }
 
 void render()
@@ -176,39 +190,44 @@ void render()
     // simple blocked map
     for (int y = 0; y < ROWS; y++) {
         for (int x = 0; x < COLS; x++) {
-            switch (map[y][x].type) {
-                case TILE_TYPE_WALL:
-                    if (y < ROWS - 1 && map[y + 1][x].type == TILE_TYPE_WALL) {
-                        render_tile(sx + x, sy + y, 0xdb, WALL_TOP_COLOR);
-                    } else {
-                        if (x > 0 && map[y][x - 1].type == TILE_TYPE_WALL && y < ROWS - 1 && map[y + 1][x - 1].type == TILE_TYPE_WALL) {
-                            render_tile_with_bg(sx + x, sy + y, 0xdf, WALL_SIDE_SHADOW_COLOR, WALL_TOP_COLOR);
+            if (!map[y][x].explored) {
+                render_tile(sx + x, sy + y, 0xdb, (struct color) { 0, 0, 0 }, false);
+            } else {
+                bool vis = map[y][x].visible;
+                switch (map[y][x].type) {
+                    case TILE_TYPE_WALL:
+                        if (y < ROWS - 1 && map[y + 1][x].type == TILE_TYPE_WALL) {
+                            render_tile(sx + x, sy + y, 0xdb, WALL_TOP_COLOR, vis);
                         } else {
-                            render_tile_with_bg(sx + x, sy + y, 0xdf, WALL_SIDE_COLOR, WALL_TOP_COLOR);
+                            if (x > 0 && map[y][x - 1].type == TILE_TYPE_WALL && y < ROWS - 1 && map[y + 1][x - 1].type == TILE_TYPE_WALL) {
+                                render_tile_with_bg(sx + x, sy + y, 0xdf, WALL_SIDE_SHADOW_COLOR, WALL_TOP_COLOR, vis);
+                            } else {
+                                render_tile_with_bg(sx + x, sy + y, 0xdf, WALL_SIDE_COLOR, WALL_TOP_COLOR, vis);
+                            }
                         }
-                    }
-                    break;
-                case TILE_TYPE_FLOOR:
-                    if (x > 0 && map[y][x - 1].type == TILE_TYPE_WALL) {
-                        render_tile(sx + x, sy + y, 0xdb, FLOOR_SHADOW_COLOR);
-                    } else {
-                        render_tile(sx + x, sy + y, 0xdb, FLOOR_COLOR);
-                    }
-                    break;
-                case TILE_TYPE_NOTHING:
-                    render_tile(sx + x, sy + y, 0xdb, (struct color) { 31, 31, 31 });
-                    break;
-                default:
-                    // something wrong!
-                    render_tile(sx + x, sy + y, '?', (struct color) { 255, 0, 0 });
-                    break;
+                        break;
+                    case TILE_TYPE_FLOOR:
+                        if (x > 0 && map[y][x - 1].type == TILE_TYPE_WALL) {
+                            render_tile(sx + x, sy + y, 0xdb, FLOOR_SHADOW_COLOR, vis);
+                        } else {
+                            render_tile(sx + x, sy + y, 0xdb, FLOOR_COLOR, vis);
+                        }
+                        break;
+                    case TILE_TYPE_NOTHING:
+                        render_tile(sx + x, sy + y, 0xdb, (struct color) { 31, 31, 31 }, vis);
+                        break;
+                    default:
+                        // something wrong!
+                        render_tile(sx + x, sy + y, '?', (struct color) { 255, 0, 0 }, vis);
+                        break;
 
+                }
             }
         }
     }
 
     // player
-    render_tile(sx + g.player_x, sy + g.player_y, '@', (struct color) { 255, 255, 255 });
+    render_tile(sx + g.player_x, sy + g.player_y, '@', (struct color) { 255, 255, 255 }, 1);
 }
 
 static uint32_t random_seed = 0x17041971;
@@ -255,6 +274,8 @@ void create_map()
     for (int y = 0; y < ROWS; y++) {
         for (int x = 0; x < COLS; x++) {
             map[y][x].type = TILE_TYPE_WALL;
+            map[y][x].visible = 0;
+            map[y][x].explored = 0;
         }
     }
 
@@ -337,7 +358,38 @@ void create_map()
 
 bool map_valid(int x, int y)
 {
-    x >= 0 && x < COLS&& y >= 0 && y < ROWS;
+    return x >= 0 && x < COLS&& y >= 0 && y < ROWS;
+}
+
+void update_fov()
+{
+    for (int y = 0; y < ROWS; y++) {
+        for (int x = 0; x < COLS; x++) {
+            map[y][x].visible = 0;
+        }
+    }
+
+    for (int i = 0; i < 360*8; i++)
+    {
+        float x = cos((float)i * 0.01745f);
+        float y = sin((float)i * 0.01745f);
+
+        float ox = (float)g.player_x + 0.5f;
+        float oy = (float)g.player_y + 0.5f;
+        for (int j = 0; j < VIEW_RADIUS; j++)
+        {
+            int mx = (int)ox;
+            int my = (int)oy;
+            if (!map_valid(mx, my))
+                break;
+            map[my][mx].visible = true;
+            map[my][mx].explored = true;
+            if (map[my][mx].type != TILE_TYPE_FLOOR)
+                break;
+            ox += x;
+            oy += y;
+        }
+    }
 }
 
 void move_player(enum direction dir)
@@ -408,6 +460,7 @@ int main(int argc, char* argv[])
             }
         }
 
+        update_fov();
         render();
         SDL_RenderPresent(g.renderer);
     }
