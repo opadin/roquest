@@ -25,6 +25,22 @@ const int VIEW_RADIUS = 10;
 
 #define MAX_ENTS 128
 
+enum action_type {
+    ACTION_TYPE_NONE = 0,
+    ACTION_TYPE_ESCAPE,
+    ACTION_TYPE_BUMP,
+    ACTION_TYPE_WAIT,
+    ACTION_TYPE_MOVE,
+    ACTION_TYPE_MELEE
+};
+
+struct action {
+    enum action_type type;
+    int param1;
+    int param2;
+    struct ent* actor;
+};
+
 enum direction {
     DIR_NOTHING = 0,
     DIR_DOWN = 1,
@@ -187,8 +203,8 @@ void render_tile(int x, int y, int ch, struct color color, bool visible)
 void render_tile_with_bg(int x, int y, int ch, struct color fg, struct color bg, bool visible)
 {
 
-    render_tile(x, y, 0xdb, fg, visible);
-    render_tile(x, y, ch, bg, visible);
+    render_tile(x, y, 0xdb, bg, visible);
+    render_tile(x, y, ch, fg, visible);
 }
 
 void render()
@@ -209,15 +225,15 @@ void render()
                             render_tile(sx + x, sy + y, 0xdb, WALL_TOP_COLOR, vis);
                         } else {
                             if (x > 0 && map[y][x - 1].type == TILE_TYPE_WALL && y < ROWS - 1 && map[y + 1][x - 1].type == TILE_TYPE_WALL) {
-                                render_tile_with_bg(sx + x, sy + y, 0xdf, WALL_SIDE_SHADOW_COLOR, WALL_TOP_COLOR, vis);
+                                render_tile_with_bg(sx + x, sy + y, 0xdf, WALL_TOP_COLOR, WALL_SIDE_SHADOW_COLOR, vis);
                             } else {
-                                render_tile_with_bg(sx + x, sy + y, 0xdf, WALL_SIDE_COLOR, WALL_TOP_COLOR, vis);
+                                render_tile_with_bg(sx + x, sy + y, 0xdf, WALL_TOP_COLOR, WALL_SIDE_COLOR, vis);
                             }
                         }
                         break;
                     case TILE_TYPE_FLOOR:
                         if (x > 0 && map[y][x - 1].type == TILE_TYPE_WALL) {
-                            render_tile(sx + x, sy + y, 0xdb, FLOOR_SHADOW_COLOR, vis);
+                            render_tile_with_bg(sx + x, sy + y, 0xdd, FLOOR_SHADOW_COLOR, FLOOR_COLOR, vis);
                         } else {
                             render_tile(sx + x, sy + y, 0xdb, FLOOR_COLOR, vis);
                         }
@@ -485,13 +501,15 @@ int main(int argc, char* argv[])
 
     random_seed = 1;
     create_map();
+    update_fov();
 
     SDL_Event event;
     bool quit_requested = false;
     while (!quit_requested)
     {
-        if (SDL_PollEvent(&event))
+        while (SDL_PollEvent(&event))
         {
+            struct action action = { .type = ACTION_TYPE_NONE };
             switch (event.type) {
                 case SDL_QUIT:
                     quit_requested = true;
@@ -500,28 +518,53 @@ int main(int argc, char* argv[])
                     switch (event.key.keysym.sym) {
                         case 'c':
                             create_map();
+                            update_fov();
                             break;
                         default:
                             switch (event.key.keysym.scancode) {
                                 case SDL_SCANCODE_UP:
-                                    move_player(DIR_UP);
+                                    action = (struct action){ .type = ACTION_TYPE_BUMP, .param1 = DIR_UP, .actor = &ents[0] };
                                     break;
                                 case SDL_SCANCODE_DOWN:
-                                    move_player(DIR_DOWN);
+                                    action = (struct action){ .type = ACTION_TYPE_BUMP, .param1 = DIR_DOWN, .actor = &ents[0] };
                                     break;
                                 case SDL_SCANCODE_LEFT:
-                                    move_player(DIR_LEFT);
+                                    action = (struct action){ .type = ACTION_TYPE_BUMP, .param1 = DIR_LEFT, .actor = &ents[0] };
                                     break;
                                 case SDL_SCANCODE_RIGHT:
-                                    move_player(DIR_RIGHT);
+                                    action = (struct action){ .type = ACTION_TYPE_BUMP, .param1 = DIR_RIGHT, .actor = &ents[0] };
+                                    break;
+                                case SDL_SCANCODE_KP_5:
+                                case SDL_SCANCODE_PERIOD:
+                                    action.type = ACTION_TYPE_WAIT;
+                                    break;
+                                case SDL_SCANCODE_ESCAPE:
+                                    action.type = ACTION_TYPE_ESCAPE;
+                                    break;
                                 default:
                                     break;
                             }
                     }
             }
+            
+            if (action.type != ACTION_TYPE_NONE) {
+
+                switch (action.type) {
+                    case ACTION_TYPE_BUMP:
+                        move_player(action.param1);
+                        break;
+                    case ACTION_TYPE_WAIT:
+                        // do nothing
+                        break;
+                    case ACTION_TYPE_ESCAPE:
+                        quit_requested = true;
+                        break;
+                }
+
+                update_fov();
+            }
         }
 
-        update_fov();
         render();
         SDL_RenderPresent(g.renderer);
     }
