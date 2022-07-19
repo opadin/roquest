@@ -5,8 +5,8 @@
 #include "stb_image.h"
 
 // TODO tile-size should be variable
-const int TILE_WIDTH = 16;
-const int TILE_HEIGHT = 16;
+const int TILE_WIDTH = 10;
+const int TILE_HEIGHT = 10;
 
 const int ZOOMX = 1;
 const int ZOOMY = 1;
@@ -95,6 +95,9 @@ struct global {
     SDL_Texture* font;
     enum game_state state;
     bool quit_requested;
+    bool focus;
+    int mouse_x;
+    int mouse_y;
 };
 
 struct global g;
@@ -193,6 +196,8 @@ const struct color WALL_SIDE_SHADOW_COLOR = { 32, 16, 0 };
 const struct color FLOOR_COLOR = { 208, 48, 120 };
 const struct color FLOOR_SHADOW_COLOR = { 152, 0, 80 };
 
+struct color white = { 0xFF, 0xFF, 0xFF };
+struct color black = { 0x0, 0x0, 0x0 };
 struct color bar_text = { 255, 255, 255 };
 struct color bar_filled = { 0x0, 0x60, 0x0 };
 struct color bar_empty = { 0x40, 0x10, 0x10 };
@@ -268,6 +273,31 @@ SDL_Texture* load_image(const char* file, int* w, int* h)
     if (!texture) fatal("could not create texture from image '%s'", file);
 
     return texture;
+}
+
+// in bounds
+bool map_valid(int x, int y)
+{
+    return x >= 0 && x < COLS&& y >= 0 && y < ROWS;
+}
+
+bool map_walkable(int x, int y)
+{
+    return map_valid(x, y) && tiles[map[y][x].type].walkable;
+}
+
+bool map_visible(int x, int y)
+{
+    return map_valid(x, y) && map[y][x].visible;
+}
+
+void get_actor_name(struct actor* a, char* res, int max)
+{
+    if (a->alive) {
+        snprintf(res, max, "%s", actor_catalog[a->type].name);
+    } else {
+        snprintf(res, max, "remains of %s", actor_catalog[a->type].name);
+    }
 }
 
 void add_message(struct color color, bool check_stack, const char* fmt, ...)
@@ -386,13 +416,13 @@ void render_message_log(int x, int y, int width, int height)
     int vspace = height;
     char text[MAX_MESSAGE_LEN];
     while (vspace > 0 && num-- > 0) {
-        
+
         const char* p = messages[cur].text;
         if (messages[cur].count > 1) {
             snprintf(text, sizeof(text), "%s  (x%d)", p, messages[cur].count);
             p = text;
         }
-        
+
         int lines = calc_lines(p, width);
         while (lines > vspace) {
             p = wrap_text(NULL, width, p);
@@ -406,7 +436,7 @@ void render_message_log(int x, int y, int width, int height)
             p = wrap_text(line, width, p);
             draw_text(x, yofs + n++, messages[cur].fg, line);
         }
-        
+
         cur = cur - 1;
         if (cur < 0) cur += num_messages;
     }
@@ -462,6 +492,24 @@ void render()
     render_message_log(21, 45, 40, 5);
 
     render_hp_bar();
+
+    if (map_visible(g.mouse_x, g.mouse_y)) {
+        char buffer[256], name[48];
+        buffer[0] = '\0';
+        for (int i = 0; i < num_actors; i++) {
+            if (actors[i].x == g.mouse_x && actors[i].y == g.mouse_y) {
+                if (buffer[0])
+                    strcat(buffer, ", ");
+                get_actor_name(&actors[i], name, sizeof(name));
+                strcat(buffer, name);
+            }
+        }
+        char* p = buffer;
+        while (*p) {
+            *p++ = toupper(*p);
+        }
+        draw_text(21, 44, white, buffer);
+    }
 }
 
 static uint32_t random_seed = 0x17041971;
@@ -601,17 +649,6 @@ void create_map()
             }
         }
     }
-}
-
-// in bounds
-bool map_valid(int x, int y)
-{
-    return x >= 0 && x < COLS&& y >= 0 && y < ROWS;
-}
-
-bool map_walkable(int x, int y)
-{
-    return map_valid(x, y) && tiles[map[y][x].type].walkable;
 }
 
 void update_fov()
@@ -873,8 +910,30 @@ void handle_game_running_state()
     {
         struct action action = { .type = ACTION_TYPE_NONE };
         switch (event.type) {
+            case SDL_WINDOWEVENT:
+                switch (event.window.event) {
+                    case SDL_WINDOWEVENT_ENTER:
+                        g.focus = true;
+                        SDL_GetMouseState(&g.mouse_x, &g.mouse_y);
+                        break;
+                    case SDL_WINDOWEVENT_LEAVE:
+                        g.focus = false;
+                        g.mouse_x = g.mouse_y = -1;
+                        break;
+                }
+                break;
             case SDL_QUIT:
                 g.quit_requested = true;
+                break;
+            case SDL_MOUSEMOTION:
+                if (g.focus) {
+                    if (event.motion.x < 0 || event.motion.y < 0 || event.motion.x >= WINDOW_WIDTH || event.motion.y >= WINDOW_HEIGHT) {
+                        g.mouse_x = g.mouse_y = -1;
+                    } else {
+                        g.mouse_x = event.motion.x / TILE_WIDTH;
+                        g.mouse_y = event.motion.y / TILE_HEIGHT;
+                    }
+                }
                 break;
             case SDL_KEYDOWN:
                 switch (event.key.keysym.sym) {
@@ -906,6 +965,17 @@ void handle_game_running_state()
                                 break;
                         }
                 }
+        }
+
+        {
+            int mx, my;
+            SDL_GetMouseState(&mx, &my);
+            if (g.window != SDL_GetMouseFocus() || mx < 0 || my < 0 || mx >= WINDOW_WIDTH || my >= WINDOW_HEIGHT) {
+                g.mouse_x = g.mouse_y = -1;
+            } else {
+                g.mouse_x = mx / TILE_WIDTH;
+                g.mouse_y = my / TILE_HEIGHT;
+            }
         }
 
         if (action.type != ACTION_TYPE_NONE) {
@@ -982,7 +1052,7 @@ int main(int argc, char* argv[])
     if (!g.renderer) fatal("could not create sdl renderer: %s", SDL_GetError());
 
     int fw, fh;
-    g.font = load_image("ex-font.png", &fw, &fh);
+    g.font = load_image("Bm437_Rainbow100_re_40.png", &fw, &fh);
     SDL_assert(fw == TILE_WIDTH * 16 && fh == TILE_HEIGHT * 16);
 
     random_seed = 1;
@@ -990,6 +1060,7 @@ int main(int argc, char* argv[])
 
     g.state = GAME_STATE_RUN;
     g.quit_requested = false;
+    g.mouse_x = g.mouse_y = -1;
     while (!g.quit_requested)
     {
         switch (g.state) {
