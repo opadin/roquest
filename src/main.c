@@ -14,7 +14,7 @@ const int ZOOMY = 1;
 #define COLS  80
 #define ROWS  45
 
-#define SCREEN_COLS ((COLS)+20)
+#define SCREEN_COLS ((COLS)+0)
 #define SCREEN_ROWS ((ROWS)+5)
 
 const int WINDOW_WIDTH = TILE_WIDTH * ZOOMX * SCREEN_COLS;
@@ -75,7 +75,7 @@ struct tile_defs {
 
 // order must be same as tile_type!
 static struct tile_info tiles[] = {
-    /* shroud */ {0, 0, {' ', {255, 255, 255}, {50, 50, 150}}, {' ', {255, 255, 255}, { 50,  50, 150}}},
+    /* shroud */ {0, 0, {' ', {255, 255, 255}, { 0,  0,   0}}, {' ', {255, 255, 255}, {  0,   0,   0}}},
     /* floor  */ {1, 1, {' ', {255, 255, 255}, {50, 50, 150}}, {' ', {255, 255, 255}, {200, 180,  50}}},
     /* wall   */ {0, 0, {' ', {255, 255, 255}, { 0,  0, 100}}, {' ', {255, 255, 255}, {130, 110,  50}}}
 };
@@ -248,7 +248,7 @@ SDL_Texture* load_image(const char* file, int* w, int* h)
     return texture;
 }
 
-void render_tile(int x, int y, int ch, struct color color, bool visible)
+void render_tile(int x, int y, int ch, struct color color)
 {
     ch &= 0xff;
     int srcx = (ch % 16) * TILE_WIDTH;
@@ -256,27 +256,55 @@ void render_tile(int x, int y, int ch, struct color color, bool visible)
     int dstx = x * TILE_WIDTH * ZOOMX;
     int dsty = y * TILE_HEIGHT * ZOOMY;
 
-    if (!visible) {
-        color.red = maxi(0, color.red - 70);
-        color.blue = maxi(0, color.blue - 70);
-        color.green = maxi(0, color.green - 70);
-    }
-
     SDL_SetTextureColorMod(g.font, color.red, color.green, color.blue);
     SDL_RenderCopy(g.renderer, g.font, &(SDL_Rect) { srcx, srcy, TILE_WIDTH, TILE_HEIGHT}, & (SDL_Rect) { dstx, dsty, TILE_WIDTH* ZOOMX, TILE_HEIGHT* ZOOMY });
 }
 
-void render_tile_with_bg(int x, int y, int ch, struct color fg, struct color bg, bool visible)
+void render_tile_with_bg(int x, int y, int ch, struct color fg, struct color bg)
 {
-    render_tile(x, y, 0xdb, bg, visible);
-    render_tile(x, y, ch, fg, visible);
+    render_tile(x, y, 0xdb, bg);
+    render_tile(x, y, ch, fg);
+}
+
+struct color bar_text = {255, 255, 255};
+struct color bar_filled = { 0x0, 0x60, 0x0 };
+struct color bar_empty = { 0x40, 0x10, 0x10 };
+
+void draw_gauge(int x, int y, int len, float rate, struct color fill, struct color empty)
+{
+    int fw = (int)(len * rate);
+    for (int n = 0; n < len; n++)
+        render_tile(x+n, y, 0xdb, n <fw ? fill : empty);
+}
+
+void draw_text(int x, int y, struct color color, const char *fmt, ...)
+{
+    char buffer[256];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buffer, sizeof(buffer), fmt, args);
+    const char* p = buffer;
+    while (*p)
+        render_tile(x++, y, *p++, color);
+    va_end(args);
+}
+
+void render_hp_bar()
+{
+    int hp = actors[0].hp;
+    int max_hp = actor_catalog[ACTOR_TYPE_PLAYER].max_hp;
+    float rate = (float)hp / max_hp;
+    draw_gauge(0, 45, 20, rate, bar_filled, bar_empty);
+    draw_text(1, 45, bar_text, "HP: %d/%d", hp, max_hp);
 }
 
 void render()
 {
     // center map in window
-    int sx = (WINDOW_WIDTH / (TILE_WIDTH * ZOOMX) - COLS) / 2;
-    int sy = (WINDOW_HEIGHT / (TILE_HEIGHT * ZOOMY) - ROWS) / 2;
+    // int sx = (WINDOW_WIDTH / (TILE_WIDTH * ZOOMX) - COLS) / 2;
+    // int sy = (WINDOW_HEIGHT / (TILE_HEIGHT * ZOOMY) - ROWS) / 2;
+    int sx = 0;
+    int sy = 0;
 
     // map
     for (int y = 0; y < ROWS; y++) {
@@ -288,7 +316,7 @@ void render()
                 struct tile_info* ti = &tiles[map[y][x].type];
                 tg = map[y][x].visible ? &ti->light : &ti->dark;
             }
-            render_tile_with_bg(sx + x, sy + y, tg->ch, tg->fg, tg->bg, true);
+            render_tile_with_bg(sx + x, sy + y, tg->ch, tg->fg, tg->bg);
         }
     }
 
@@ -300,13 +328,15 @@ void render()
                 if (map[a->y][a->x].visible) {
                     struct actor_info* e = &actor_catalog[a->type];
                     if (!a->alive)
-                        render_tile(sx + a->x, sy + a->y, '%', (struct color) { 191, 0, 0 }, 1);
+                        render_tile(sx + a->x, sy + a->y, '%', (struct color) { 191, 0, 0 });
                     else
-                        render_tile(sx + a->x, sy + a->y, e->character, e->color, 1);
+                        render_tile(sx + a->x, sy + a->y, e->character, e->color);
                 }
             }
         }
     }
+    
+    render_hp_bar();
 }
 
 static uint32_t random_seed = 0x17041971;
