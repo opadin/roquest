@@ -26,6 +26,9 @@ const int VIEW_RADIUS = 10;
 #define MAX_ACTORS 128
 #define MAX_CORPSES MAX_ACTORS
 
+#define MAX_MESSAGE_LEN 256
+#define MAX_MESSAGES_IN_LOG 128
+
 enum action_type {
     ACTION_TYPE_NONE = 0,
     ACTION_TYPE_ESCAPE,
@@ -152,6 +155,16 @@ struct actor {
 static struct actor actors[MAX_ACTORS];
 static int num_actors;
 
+struct message {
+    char text[MAX_MESSAGE_LEN];
+    struct color fg;
+    int count;
+};
+
+static struct message messages[MAX_MESSAGES_IN_LOG];
+static int last_message;
+static int num_messages;
+
 int maxi(int a, int b) { return a >= b ? a : b; }
 int mini(int a, int b) { return a <= b ? a : b; }
 
@@ -179,6 +192,15 @@ const struct color WALL_SIDE_COLOR = { 104, 104, 72 };
 const struct color WALL_SIDE_SHADOW_COLOR = { 32, 16, 0 };
 const struct color FLOOR_COLOR = { 208, 48, 120 };
 const struct color FLOOR_SHADOW_COLOR = { 152, 0, 80 };
+
+struct color bar_text = { 255, 255, 255 };
+struct color bar_filled = { 0x0, 0x60, 0x0 };
+struct color bar_empty = { 0x40, 0x10, 0x10 };
+struct color welcome_text = { 0x20, 0xA0, 0xFF };
+struct color player_atk = { 0xE0, 0xE0, 0xE0 };
+struct color enemy_atk = { 0xFF, 0xC0, 0xC0 };
+struct color player_die = { 0xFF, 0x30, 0x30 };
+struct color enemy_die = { 0xFF, 0xA0, 0x30 };
 
 _Noreturn void fatal(SDL_PRINTF_FORMAT_STRING const char* format, ...)
 {
@@ -248,6 +270,26 @@ SDL_Texture* load_image(const char* file, int* w, int* h)
     return texture;
 }
 
+void add_message(struct color color, bool check_stack, const char* fmt, ...)
+{
+    char buffer[MAX_MESSAGE_LEN];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+
+    if (check_stack && num_messages > 0 && !strcmp(messages[last_message].text, buffer)) {
+        messages[last_message].count++;
+    } else {
+        if (num_messages < SDL_arraysize(messages))
+            num_messages++;
+        last_message = (last_message + 1) % SDL_arraysize(messages);
+        strcpy(messages[last_message].text, buffer);
+        messages[last_message].count = 1;
+        messages[last_message].fg = color;
+    }
+}
+
 void render_tile(int x, int y, int ch, struct color color)
 {
     ch &= 0xff;
@@ -266,18 +308,14 @@ void render_tile_with_bg(int x, int y, int ch, struct color fg, struct color bg)
     render_tile(x, y, ch, fg);
 }
 
-struct color bar_text = {255, 255, 255};
-struct color bar_filled = { 0x0, 0x60, 0x0 };
-struct color bar_empty = { 0x40, 0x10, 0x10 };
-
 void draw_gauge(int x, int y, int len, float rate, struct color fill, struct color empty)
 {
     int fw = (int)(len * rate);
     for (int n = 0; n < len; n++)
-        render_tile(x+n, y, 0xdb, n <fw ? fill : empty);
+        render_tile(x + n, y, 0xdb, n < fw ? fill : empty);
 }
 
-void draw_text(int x, int y, struct color color, const char *fmt, ...)
+void draw_text(int x, int y, struct color color, const char* fmt, ...)
 {
     char buffer[256];
     va_list args;
@@ -287,6 +325,91 @@ void draw_text(int x, int y, struct color color, const char *fmt, ...)
     while (*p)
         render_tile(x++, y, *p++, color);
     va_end(args);
+}
+
+bool is_blank(char ch)
+{
+    return ch == ' ' || ch == '\n' || ch == '\r';
+}
+
+const char* wrap_text(char* res, int max_len, const char* text)
+{
+    SDL_assert(*text && max_len > 0);
+
+    const char* p = text;
+    while (*p) {
+        if (*p++ == '\n')
+            break;
+    }
+
+    int c = p - text;
+    SDL_assert(c > 0);
+    if (c >= max_len) {
+        c = max_len;
+        while (c > 0 && !is_blank(text[c]))
+            c--;
+        if (c == 0)
+            c = max_len;
+        else
+            c++;
+    }
+
+    if (res) {
+        memcpy(res, text, c);
+        if (res[c] == '\n') {
+            c--;
+        }
+        res[c] = '\0';
+    }
+
+    return text + c;
+}
+
+int calc_lines(const char* text, int max_width)
+{
+    int lines = 0;
+    while (*text) {
+        text = wrap_text(NULL, max_width, text);
+        lines++;
+    }
+    return lines;
+}
+
+void render_message_log(int x, int y, int width, int height)
+{
+    if (num_messages == 0)
+        return;
+    int yofs = y + height;
+    int cur = last_message;
+    int num = num_messages;
+    char line[COLS];
+    int vspace = height;
+    char text[MAX_MESSAGE_LEN];
+    while (vspace > 0 && num-- > 0) {
+        
+        const char* p = messages[cur].text;
+        if (messages[cur].count > 1) {
+            snprintf(text, sizeof(text), "%s  (x%d)", p, messages[cur].count);
+            p = text;
+        }
+        
+        int lines = calc_lines(p, width);
+        while (lines > vspace) {
+            p = wrap_text(NULL, width, p);
+            lines--;
+        }
+
+        yofs -= lines;
+        vspace -= lines;
+        int n = 0;
+        while (*p) {
+            p = wrap_text(line, width, p);
+            draw_text(x, yofs + n++, messages[cur].fg, line);
+        }
+        
+        cur = cur - 1;
+        if (cur < 0) cur += num_messages;
+    }
 }
 
 void render_hp_bar()
@@ -335,7 +458,9 @@ void render()
             }
         }
     }
-    
+
+    render_message_log(21, 45, 40, 5);
+
     render_hp_bar();
 }
 
@@ -393,6 +518,7 @@ void create_map()
     struct room rooms[MAX_ROOMS_PER_MAP];
     int num_rooms = 0;
     num_actors = 0;
+    num_messages = 0;
 
     for (int n = 0; n < MAX_ROOMS_PER_MAP; n++) {
 
@@ -671,13 +797,16 @@ void actor_set_hp(struct actor* a, int hp)
     if (a->hp == 0) {
         a->alive = false;
         char death_message[128];
+        struct color color;
         if (a->type == ACTOR_TYPE_PLAYER) {
             snprintf(death_message, sizeof(death_message), "You died!");
+            color = player_die;
             g.state = GAME_STATE_DEAD;
         } else {
             snprintf(death_message, sizeof(death_message), "%s is dead!", actor_catalog[a->type].name);
+            color = enemy_die;
         }
-        SDL_Log(death_message);
+        add_message(color, 1, death_message);
     }
 }
 
@@ -692,12 +821,14 @@ void execute_melee(struct actor* source, struct actor* target)
         name[n] = toupper(*p++);
     name[n] = '\0';
 
+    struct color attack_color = source->type == ACTOR_TYPE_PLAYER ? player_atk : enemy_atk;
+
     snprintf(attack_desc, sizeof(attack_desc), "%s attacks %s", name, target_info->name);
     if (damage > 0) {
-        SDL_Log("%s for %d hit points.", attack_desc, damage);
+        add_message(attack_color, 1, "%s for %d hit points.", attack_desc, damage);
         actor_set_hp(target, target->hp - damage);
     } else {
-        SDL_Log("%s but does no damage.", attack_desc);
+        add_message(attack_color, 1, "%s but does no damage.", attack_desc);
     }
 }
 
@@ -728,6 +859,13 @@ void bump_player(enum direction dir)
     }
 }
 
+void start_game()
+{
+    create_map();
+    update_fov();
+    add_message(welcome_text, 0, "Hello and welcome, adventurer, to yet another dungeon!");
+}
+
 void handle_game_running_state()
 {
     SDL_Event event;
@@ -741,8 +879,7 @@ void handle_game_running_state()
             case SDL_KEYDOWN:
                 switch (event.key.keysym.sym) {
                     case 'c':
-                        create_map();
-                        update_fov();
+                        start_game();
                         break;
                     default:
                         switch (event.key.keysym.scancode) {
@@ -844,16 +981,12 @@ int main(int argc, char* argv[])
     g.renderer = SDL_CreateRenderer(g.window, -1, 0);
     if (!g.renderer) fatal("could not create sdl renderer: %s", SDL_GetError());
 
-    SDL_SetRenderDrawColor(g.renderer, 0, 0, 0, 255);
-    SDL_RenderClear(g.renderer);
-
     int fw, fh;
     g.font = load_image("ex-font.png", &fw, &fh);
     SDL_assert(fw == TILE_WIDTH * 16 && fh == TILE_HEIGHT * 16);
 
     random_seed = 1;
-    create_map();
-    update_fov();
+    start_game();
 
     g.state = GAME_STATE_RUN;
     g.quit_requested = false;
@@ -868,6 +1001,8 @@ int main(int argc, char* argv[])
                 break;
         }
 
+        SDL_SetRenderDrawColor(g.renderer, 0, 0, 0, 255);
+        SDL_RenderClear(g.renderer);
         render();
         SDL_RenderPresent(g.renderer);
     }
