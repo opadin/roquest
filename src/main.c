@@ -5,7 +5,7 @@
 #include "stb_image.h"
 
 // TODO tile-size should be variable
-const int TILE_WIDTH = 8;
+const int TILE_WIDTH = 16;
 const int TILE_HEIGHT = 16;
 
 const int ZOOMX = 1;
@@ -17,13 +17,14 @@ const int ZOOMY = 1;
 #define SCREEN_COLS ((COLS)+20)
 #define SCREEN_ROWS ((ROWS)+5)
 
-const int WINDOW_WIDTH = TILE_WIDTH * SCREEN_COLS;
-const int WINDOW_HEIGHT = TILE_HEIGHT * SCREEN_ROWS;
+const int WINDOW_WIDTH = TILE_WIDTH * ZOOMX * SCREEN_COLS;
+const int WINDOW_HEIGHT = TILE_HEIGHT * ZOOMY * SCREEN_ROWS;
 
 const int MAX_ROOMS_PER_MAP = 30;
 const int VIEW_RADIUS = 10;
 
-#define MAX_ENTS 128
+#define MAX_ACTORS 128
+#define MAX_CORPSES MAX_ACTORS
 
 enum action_type {
     ACTION_TYPE_NONE = 0,
@@ -49,22 +50,56 @@ enum direction {
     DIR_UP = 4
 };
 
+struct color {
+    uint8_t red, green, blue;
+};
+
+struct tile_graphic {
+    char ch;
+    struct color fg;
+    struct color bg;
+};
+
+struct tile_info {
+    struct {
+        int walkable : 1;
+        int transparent : 1;
+    };
+    struct tile_graphic dark;
+    struct tile_graphic light;
+};
+
+struct tile_defs {
+    struct tile_info floor, wall, shroud;
+};
+
+// order must be same as tile_type!
+static struct tile_info tiles[] = {
+    /* shroud */ {0, 0, {' ', {255, 255, 255}, {50, 50, 150}}, {' ', {255, 255, 255}, { 50,  50, 150}}},
+    /* floor  */ {1, 1, {' ', {255, 255, 255}, {50, 50, 150}}, {' ', {255, 255, 255}, {200, 180,  50}}},
+    /* wall   */ {0, 0, {' ', {255, 255, 255}, { 0,  0, 100}}, {' ', {255, 255, 255}, {130, 110,  50}}}
+};
+
+enum game_state {
+    GAME_STATE_NONE,
+    GAME_STATE_RUN,
+    GAME_STATE_DEAD
+};
+
 struct global {
     SDL_Window* window;
     SDL_Renderer* renderer;
     SDL_Texture* font;
+    enum game_state state;
+    bool quit_requested;
 };
 
 struct global g;
 
 enum tile_type {
-    TILE_TYPE_NOTHING,
-    TILE_TYPE_WALL,
-    TILE_TYPE_FLOOR
-};
-
-struct color {
-    uint8_t red, green, blue;
+    TILE_TYPE_SHROUD,
+    TILE_TYPE_FLOOR,
+    TILE_TYPE_WALL
 };
 
 struct map_tile {
@@ -77,14 +112,45 @@ struct map_tile {
 
 static struct map_tile map[ROWS][COLS];
 
-struct ent {
-    bool used;
-    int ch;
+enum render_order {
+    RENDER_ORDER_CORPSE,
+    RENDER_ORDER_ITEM,
+    RENDER_ORDER_ACTOR
+};
+
+// static actor data infos
+enum actor_type {
+    ACTOR_TYPE_PLAYER,
+    ACTOR_TYPE_ORC,
+    ACTOR_TYPE_TROLL,
+    NUM_ACTOR_TYPES
+};
+
+struct actor_info {
+    char character;
+    struct color color;
+    const char* name;
+    int max_hp;
+    int defense;
+    int power;
+};
+
+struct actor_info actor_catalog[NUM_ACTOR_TYPES] = {
+    { '@', { 255, 255, 255}, "player", 30, 2, 5 },
+    { 'o', {  63, 127,  63}, "Orc", 10, 0, 3 },
+    { 'T', {   0, 127,   0}, "Troll", 16, 1, 4 }
+};
+
+struct actor {
+    enum actor_type type;
     int x, y;
+    bool alive;
+    int hp;
 };
 
 // ent #0 is player
-static struct ent ents[MAX_ENTS];
+static struct actor actors[MAX_ACTORS];
+static int num_actors;
 
 int maxi(int a, int b) { return a >= b ? a : b; }
 int mini(int a, int b) { return a <= b ? a : b; }
@@ -98,7 +164,7 @@ void dump_map()
             switch (map[y][x].type) {
                 case TILE_TYPE_WALL: s[x] = 'x'; break;
                 case TILE_TYPE_FLOOR: s[x] = '.'; break;
-                case TILE_TYPE_NOTHING: s[x] = '~'; break;
+                case TILE_TYPE_SHROUD: s[x] = '~'; break;
                 default: s[x] = '?'; break;
 
             }
@@ -202,66 +268,43 @@ void render_tile(int x, int y, int ch, struct color color, bool visible)
 
 void render_tile_with_bg(int x, int y, int ch, struct color fg, struct color bg, bool visible)
 {
-
     render_tile(x, y, 0xdb, bg, visible);
     render_tile(x, y, ch, fg, visible);
 }
 
 void render()
 {
+    // center map in window
     int sx = (WINDOW_WIDTH / (TILE_WIDTH * ZOOMX) - COLS) / 2;
     int sy = (WINDOW_HEIGHT / (TILE_HEIGHT * ZOOMY) - ROWS) / 2;
 
-    // simple blocked map
+    // map
     for (int y = 0; y < ROWS; y++) {
         for (int x = 0; x < COLS; x++) {
+            struct tile_graphic* tg;
             if (!map[y][x].explored) {
-                render_tile(sx + x, sy + y, 0xdb, (struct color) { 0, 0, 0 }, false);
+                tg = &tiles[0].light;
             } else {
-                bool vis = map[y][x].visible;
-                switch (map[y][x].type) {
-                    case TILE_TYPE_WALL:
-                        if (y < ROWS - 1 && map[y + 1][x].type == TILE_TYPE_WALL) {
-                            render_tile(sx + x, sy + y, 0xdb, WALL_TOP_COLOR, vis);
-                        } else {
-                            if (x > 0 && map[y][x - 1].type == TILE_TYPE_WALL && y < ROWS - 1 && map[y + 1][x - 1].type == TILE_TYPE_WALL) {
-                                render_tile_with_bg(sx + x, sy + y, 0xdf, WALL_TOP_COLOR, WALL_SIDE_SHADOW_COLOR, vis);
-                            } else {
-                                render_tile_with_bg(sx + x, sy + y, 0xdf, WALL_TOP_COLOR, WALL_SIDE_COLOR, vis);
-                            }
-                        }
-                        break;
-                    case TILE_TYPE_FLOOR:
-                        if (x > 0 && map[y][x - 1].type == TILE_TYPE_WALL) {
-                            render_tile_with_bg(sx + x, sy + y, 0xdd, FLOOR_SHADOW_COLOR, FLOOR_COLOR, vis);
-                        } else {
-                            render_tile(sx + x, sy + y, 0xdb, FLOOR_COLOR, vis);
-                        }
-                        break;
-                    case TILE_TYPE_NOTHING:
-                        render_tile(sx + x, sy + y, 0xdb, (struct color) { 31, 31, 31 }, vis);
-                        break;
-                    default:
-                        // something wrong!
-                        render_tile(sx + x, sy + y, '?', (struct color) { 255, 0, 0 }, vis);
-                        break;
-
-                }
+                struct tile_info* ti = &tiles[map[y][x].type];
+                tg = map[y][x].visible ? &ti->light : &ti->dark;
             }
+            render_tile_with_bg(sx + x, sy + y, tg->ch, tg->fg, tg->bg, true);
         }
     }
 
-    // player + monsters
-    for (int k = 0; k < MAX_ENTS; k++) {
-        if (ents[k].used && map[ents[k].y][ents[k].x].visible) {
-            struct color c;
-            switch (ents[k].ch) {
-                case '@': c = (struct color){ 255, 255, 255 }; break;
-                case 'o': c = (struct color){ 191, 191, 0 }; break;
-                case 'T': c = (struct color){ 255, 255, 0 }; break;
-                default: c = (struct color){ 255, 0, 0 }; break;
+    // entities: player + monsters
+    for (int i = 0; i < 2; i++) {
+        for (int k = 0; k < num_actors; k++) {
+            struct actor* a = &actors[k];
+            if ((i == 0) != a->alive) {
+                if (map[a->y][a->x].visible) {
+                    struct actor_info* e = &actor_catalog[a->type];
+                    if (!a->alive)
+                        render_tile(sx + a->x, sy + a->y, '%', (struct color) { 191, 0, 0 }, 1);
+                    else
+                        render_tile(sx + a->x, sy + a->y, e->character, e->color, 1);
+                }
             }
-            render_tile(sx + ents[k].x, sy + ents[k].y, ents[k].ch, c, 1);
         }
     }
 }
@@ -289,10 +332,12 @@ struct room {
     int ax, ay, bx, by;
 };
 
-void hline(int x, int y, int len)
+void spawn_actor(enum actor_type type, int x, int y)
 {
-    for (int j = 0; j < len; j++)
-        map[y][x + j].type = TILE_TYPE_FLOOR;
+    if (num_actors < SDL_arraysize(actors)) {
+        actors[num_actors++] = (struct actor){ .type = type, .x = x, .y = y, .hp = actor_catalog[type].max_hp, .alive = 1 };
+        SDL_Log("  Actor #%d : %s (%d/%d)", num_actors, actor_catalog[type].name, x, y);
+    }
 }
 
 void create_map()
@@ -315,11 +360,9 @@ void create_map()
         }
     }
 
-    for (int n = 0; n < MAX_ENTS; n++)
-        ents[n].used = 0;
-
     struct room rooms[MAX_ROOMS_PER_MAP];
     int num_rooms = 0;
+    num_actors = 0;
 
     for (int n = 0; n < MAX_ROOMS_PER_MAP; n++) {
 
@@ -348,12 +391,7 @@ void create_map()
             }
 
             if (num_rooms == 0) {
-                ents[0] = (struct ent) {
-                    .used = 1,
-                    .x = x + w / 2,
-                    .y = y + h / 2,
-                    .ch = '@'
-                };
+                spawn_actor(ACTOR_TYPE_PLAYER, x + w / 2, y + h / 2);
             } else {
                 struct room* prev_room = &rooms[num_rooms - 1];
 
@@ -403,33 +441,21 @@ void create_map()
             for (int i = 0; i < num_monsters; i++) {
                 int ex = x + random(w);
                 int ey = y + random(h);
-                bool found = false;
-                for (int k = 0; k < MAX_ENTS; k++) {
-                    if (ents[k].used && ents[k].x == x && ents[k].y == y) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    int k = 0;
-                    while (k < MAX_ENTS && ents[k].used)
-                        k++;
-                    if (k < MAX_ENTS) {
-                        ents[k].used = 1;
-                        ents[k].x = ex;
-                        ents[k].y = ey;
-                        ents[k].ch = random(100) < 80 ? 'o' : 'T';
-                        SDL_Log("  Mon#%d : %c (%d/%d)", k, ents[k].ch, ents[k].x, ents[k].y);
-                    }
-                }
+                spawn_actor(random(100) < 80 ? ACTOR_TYPE_ORC : ACTOR_TYPE_TROLL, ex, ey);
             }
         }
     }
 }
 
+// in bounds
 bool map_valid(int x, int y)
 {
     return x >= 0 && x < COLS&& y >= 0 && y < ROWS;
+}
+
+bool map_walkable(int x, int y)
+{
+    return map_valid(x, y) && tiles[map[y][x].type].walkable;
 }
 
 void update_fov()
@@ -445,8 +471,8 @@ void update_fov()
         float x = cos((float)i * 0.01745f);
         float y = sin((float)i * 0.01745f);
 
-        float ox = (float)ents[0].x + 0.5f;
-        float oy = (float)ents[0].y + 0.5f;
+        float ox = (float)actors[0].x + 0.5f;
+        float oy = (float)actors[0].y + 0.5f;
         for (int j = 0; j < VIEW_RADIUS; j++)
         {
             int mx = (int)ox;
@@ -463,19 +489,315 @@ void update_fov()
     }
 }
 
-void move_player(enum direction dir)
+int heuristics(int ax, int ay, int bx, int by)
 {
-    int nx = ents[0].x + (dir == DIR_RIGHT ? 1 : (dir == DIR_LEFT ? -1 : 0));
-    int ny = ents[0].y + (dir == DIR_DOWN ? 1 : (dir == DIR_UP ? -1 : 0));
-    if (map_valid(nx, ny) && map[ny][nx].type == TILE_TYPE_FLOOR) {
-        for (int n = 1; n < MAX_ENTS; n++) {
-            if (ents[n].used && ents[n].x == nx && ents[n].y == ny) {
-                SDL_Log("You kick the %c, much to its annoyance!", ents[n].ch);
-                return;
+    return abs(bx - ax) + abs(ay - by);
+}
+
+struct path_node {
+    bool visited;
+    int distance;
+    int costs;
+    int prevx, prevy;
+    struct path_node* lnext;
+    int x;
+    int y;
+};
+
+struct actor* get_alive_actor_at(int x, int y)
+{
+    for (int n = 0; n < num_actors; n++) {
+        struct actor* a = &actors[n];
+        if (a->alive && a->x == x && a->y == y)
+            return a;
+    }
+    return NULL;
+}
+
+void path_udpate_node(struct path_node* v, struct path_node* u, int x, int y)
+{
+    if (!v->visited && v->costs > 0) {
+        int c = u->distance + v->costs;
+        if (c < v->distance) {
+            v->distance = c;
+            v->prevx = x;
+            v->prevy = y;
+        }
+    }
+}
+
+bool find_path(int from_x, int from_y, int to_x, int to_y, int* first_x, int* first_y)
+{
+
+    struct path_node* v, * u, nodes[ROWS][COLS];
+    struct path_node* list = 0, * prev, * p, ** q;
+
+    for (int n = 0; n < ROWS * COLS; n++) {
+        int y = n / COLS;
+        int x = n % COLS;
+        nodes[y][x].visited = 0;
+        nodes[y][x].distance = INT_MAX;
+        nodes[y][x].costs = map_walkable(x, y) ? 1 : 0;
+        nodes[y][x].prevx = -1;
+        nodes[y][x].prevy = -1;
+        nodes[y][x].lnext = 0;
+        nodes[y][x].x = x;
+        nodes[y][x].y = y;
+    }
+
+    for (int n = 0; n < num_actors; n++) {
+        struct actor* a = &actors[n];
+        if (a->alive)
+            nodes[a->y][a->x].costs += 10;
+    }
+
+    int x = from_x;
+    int y = from_y;
+    nodes[y][x].distance = 0;
+    nodes[to_y][to_x].costs = 1;
+
+    u = &nodes[y][x];
+    list = &nodes[y][x];
+
+    for (;;) {
+
+        if (!list) {
+            SDL_Log("no path found");
+            return false;
+        }
+
+        u = list;
+        list = list->lnext;
+
+        x = u->x;
+        y = u->y;
+
+        if (x == to_x && y == to_y)
+            break;
+
+        for (int n = 0; n < 4; n++) {
+            v = 0;
+            switch (n) {
+                case 0: if (x > 0) v = &nodes[y][x - 1]; break;
+                case 1: if (x < COLS - 1); v = &nodes[y][x + 1]; break;
+                case 2: if (y > 0) v = &nodes[y - 1][x]; break;
+                case 3: if (y < ROWS - 1) v = &nodes[y + 1][x]; break;
+            }
+
+            if (!v->visited && v->costs > 0) {
+                int c = u->distance + v->costs;
+                if (c < v->distance) {
+                    v->distance = c;
+                    v->prevx = x;
+                    v->prevy = y;
+
+                    q = &list;
+                    while (*q && (*q)->distance <= v->distance) {
+                        q = &(*q)->lnext;
+                    }
+                    v->lnext = *q;
+                    *q = v;
+                }
             }
         }
-        ents[0].x = nx;
-        ents[0].y = ny;
+
+        nodes[y][x].visited = 1;
+    }
+
+    // dump
+    // SDL_Log("\n\nDIJKSTRA\n");
+    // char s[COLS + 1];
+    // for (int n = 0; n < ROWS * COLS; n++) {
+    //     int y = n / COLS;
+    //     int x = n % COLS;
+    //     if (nodes[y][x].costs == 0) {
+    //         s[x] = '#';
+    //     } else if (nodes[y][x].distance == INT_MAX) {
+    //         s[x] = '?';
+    //     } else if (nodes[y][x].distance >= 10) {
+    //         s[x] = 'V';
+    //     } else {
+    //         s[x] = '0' + nodes[y][x].distance;
+    //     }
+    //     if (x == COLS - 1) {
+    //         s[COLS] = '\0';
+    //         SDL_Log(s);
+    //     }
+    // }
+
+    // get first entry
+    while (u->prevx != from_x || u->prevy != from_y)
+        u = &nodes[u->prevy][u->prevx];
+
+    *first_x = u->x;
+    *first_y = u->y;
+
+    return true;
+}
+
+void actor_set_hp(struct actor* a, int hp)
+{
+    a->hp = maxi(mini(hp, actor_catalog[a->type].max_hp), 0);
+    if (a->hp == 0) {
+        a->alive = false;
+        char death_message[128];
+        if (a->type == ACTOR_TYPE_PLAYER) {
+            snprintf(death_message, sizeof(death_message), "You died!");
+            g.state = GAME_STATE_DEAD;
+        } else {
+            snprintf(death_message, sizeof(death_message), "%s is dead!", actor_catalog[a->type].name);
+        }
+        SDL_Log(death_message);
+    }
+}
+
+void execute_melee(struct actor* source, struct actor* target)
+{
+    struct actor_info* source_info = &actor_catalog[source->type], * target_info = &actor_catalog[target->type];
+    int damage = source_info->power - target_info->defense;
+    char name[32], attack_desc[128];
+    const char* p = source_info->name;
+    int n;
+    for (n = 0; n < sizeof(name) - 1; n++)
+        name[n] = toupper(*p++);
+    name[n] = '\0';
+
+    snprintf(attack_desc, sizeof(attack_desc), "%s attacks %s", name, target_info->name);
+    if (damage > 0) {
+        SDL_Log("%s for %d hit points.", attack_desc, damage);
+        actor_set_hp(target, target->hp - damage);
+    } else {
+        SDL_Log("%s but does no damage.", attack_desc);
+    }
+}
+
+void move_actor(struct actor* a, int nx, int ny)
+{
+    if (map_valid(nx, ny) && map_walkable(nx, ny)) {
+        struct actor* target = get_alive_actor_at(nx, ny);
+        if (!target) {
+            a->x = nx;
+            a->y = ny;
+        }
+    }
+}
+
+void bump_player(enum direction dir)
+{
+    struct actor* player = &actors[0];
+    int nx = player->x + (dir == DIR_RIGHT ? 1 : (dir == DIR_LEFT ? -1 : 0));
+    int ny = player->y + (dir == DIR_DOWN ? 1 : (dir == DIR_UP ? -1 : 0));
+    if (map_valid(nx, ny) && map_walkable(nx, ny)) {
+        struct actor* target = get_alive_actor_at(nx, ny);
+        if (target) {
+            execute_melee(player, target);
+            return;
+        }
+        player->x = nx;
+        player->y = ny;
+    }
+}
+
+void handle_game_running_state()
+{
+    SDL_Event event;
+    while (SDL_PollEvent(&event))
+    {
+        struct action action = { .type = ACTION_TYPE_NONE };
+        switch (event.type) {
+            case SDL_QUIT:
+                g.quit_requested = true;
+                break;
+            case SDL_KEYDOWN:
+                switch (event.key.keysym.sym) {
+                    case 'c':
+                        create_map();
+                        update_fov();
+                        break;
+                    default:
+                        switch (event.key.keysym.scancode) {
+                            case SDL_SCANCODE_UP:
+                                action = (struct action){ .type = ACTION_TYPE_BUMP, .param1 = DIR_UP };
+                                break;
+                            case SDL_SCANCODE_DOWN:
+                                action = (struct action){ .type = ACTION_TYPE_BUMP, .param1 = DIR_DOWN };
+                                break;
+                            case SDL_SCANCODE_LEFT:
+                                action = (struct action){ .type = ACTION_TYPE_BUMP, .param1 = DIR_LEFT };
+                                break;
+                            case SDL_SCANCODE_RIGHT:
+                                action = (struct action){ .type = ACTION_TYPE_BUMP, .param1 = DIR_RIGHT };
+                                break;
+                            case SDL_SCANCODE_KP_5:
+                            case SDL_SCANCODE_PERIOD:
+                                action.type = ACTION_TYPE_WAIT;
+                                break;
+                            case SDL_SCANCODE_ESCAPE:
+                                action.type = ACTION_TYPE_ESCAPE;
+                                break;
+                            default:
+                                break;
+                        }
+                }
+        }
+
+        if (action.type != ACTION_TYPE_NONE) {
+
+            switch (action.type) {
+                case ACTION_TYPE_BUMP:
+                    bump_player(action.param1);
+                    break;
+                case ACTION_TYPE_WAIT:
+                    // do nothing
+                    break;
+                case ACTION_TYPE_ESCAPE:
+                    g.quit_requested = true;
+                    break;
+            }
+
+            // handle enemies
+            struct actor* player = &actors[0];
+            for (int n = 1; n < num_actors; n++) {
+
+                struct actor* a = &actors[n];
+
+                if (a->alive && map[a->y][a->x].visible) {
+                    int distance = abs(player->x - a->x) + abs(player->y - a->y);
+                    if (distance == 1) {
+                        execute_melee(a, player);
+                    } else {
+                        int dx, dy;
+                        if (find_path(a->x, a->y, player->x, player->y, &dx, &dy)) {
+                            move_actor(a, dx, dy);
+                        }
+                    }
+                }
+
+            }
+            update_fov();
+        }
+    }
+}
+
+void handle_game_over_state()
+{
+    SDL_Event event;
+    while (SDL_PollEvent(&event))
+    {
+        struct action action = { .type = ACTION_TYPE_NONE };
+        switch (event.type) {
+            case SDL_QUIT:
+                g.quit_requested = true;
+                break;
+            case SDL_KEYDOWN:
+                switch (event.key.keysym.scancode) {
+                    case SDL_SCANCODE_ESCAPE:
+                        g.quit_requested = true;
+                        break;
+                    default:
+                        break;
+                }
+        }
     }
 }
 
@@ -496,73 +818,24 @@ int main(int argc, char* argv[])
     SDL_RenderClear(g.renderer);
 
     int fw, fh;
-    g.font = load_image("default-font.png", &fw, &fh);
+    g.font = load_image("ex-font.png", &fw, &fh);
     SDL_assert(fw == TILE_WIDTH * 16 && fh == TILE_HEIGHT * 16);
 
     random_seed = 1;
     create_map();
     update_fov();
 
-    SDL_Event event;
-    bool quit_requested = false;
-    while (!quit_requested)
+    g.state = GAME_STATE_RUN;
+    g.quit_requested = false;
+    while (!g.quit_requested)
     {
-        while (SDL_PollEvent(&event))
-        {
-            struct action action = { .type = ACTION_TYPE_NONE };
-            switch (event.type) {
-                case SDL_QUIT:
-                    quit_requested = true;
-                    break;
-                case SDL_KEYDOWN:
-                    switch (event.key.keysym.sym) {
-                        case 'c':
-                            create_map();
-                            update_fov();
-                            break;
-                        default:
-                            switch (event.key.keysym.scancode) {
-                                case SDL_SCANCODE_UP:
-                                    action = (struct action){ .type = ACTION_TYPE_BUMP, .param1 = DIR_UP, .actor = &ents[0] };
-                                    break;
-                                case SDL_SCANCODE_DOWN:
-                                    action = (struct action){ .type = ACTION_TYPE_BUMP, .param1 = DIR_DOWN, .actor = &ents[0] };
-                                    break;
-                                case SDL_SCANCODE_LEFT:
-                                    action = (struct action){ .type = ACTION_TYPE_BUMP, .param1 = DIR_LEFT, .actor = &ents[0] };
-                                    break;
-                                case SDL_SCANCODE_RIGHT:
-                                    action = (struct action){ .type = ACTION_TYPE_BUMP, .param1 = DIR_RIGHT, .actor = &ents[0] };
-                                    break;
-                                case SDL_SCANCODE_KP_5:
-                                case SDL_SCANCODE_PERIOD:
-                                    action.type = ACTION_TYPE_WAIT;
-                                    break;
-                                case SDL_SCANCODE_ESCAPE:
-                                    action.type = ACTION_TYPE_ESCAPE;
-                                    break;
-                                default:
-                                    break;
-                            }
-                    }
-            }
-            
-            if (action.type != ACTION_TYPE_NONE) {
-
-                switch (action.type) {
-                    case ACTION_TYPE_BUMP:
-                        move_player(action.param1);
-                        break;
-                    case ACTION_TYPE_WAIT:
-                        // do nothing
-                        break;
-                    case ACTION_TYPE_ESCAPE:
-                        quit_requested = true;
-                        break;
-                }
-
-                update_fov();
-            }
+        switch (g.state) {
+            case GAME_STATE_RUN:
+                handle_game_running_state();
+                break;
+            case GAME_STATE_DEAD:
+                handle_game_over_state();
+                break;
         }
 
         render();
